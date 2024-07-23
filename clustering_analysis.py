@@ -34,8 +34,7 @@ def get_dataset(dataset_type: DatasetTypes):
 dataset = get_dataset(DatasetTypes.INTERNET)
 
 # %%
-# Load tokenizer and model
-num_samples = 2
+num_samples = 1
 max_clusters = 10
 num_heads = 12
 head_dim = 64
@@ -108,10 +107,10 @@ for i, (name, samples_out) in enumerate(all_intermediates.items()):
             projs_per_layer[i][j].append(q_head.numpy())
 # %%
 import multiprocessing as mp
+from sklearn.decomposition import PCA
+
 
 # %%
-
-
 def process_head(args):
     i, j, k, q_head = args
     print(
@@ -157,34 +156,17 @@ def parallel_clustering(projs_per_layer, max_clusters):
 
     for i, j in organized_results.keys():
         optimal = organized_results[(i, j)]["optimal_k"]
+        q_proj_scaled = organized_results[(i, j)]["data"]
         kmeans = KMeans(n_clusters=optimal, random_state=42, n_init=10)
         kmeans_labels = kmeans.fit_predict(q_proj_scaled)
 
-    pca = PCA(n_components=2)
-    queries_2d = pca.fit_transform(q_proj_scaled)
+        pca = PCA(n_components=2)
+        queries_2d = pca.fit_transform(q_proj_scaled)
 
-
-# %%
-for i, layer_projs in enumerate(projs_per_layer):
-    for j, q_head in enumerate(layer_projs):
-        print(f"query projections for layer {i} head {j}")
-        q_proj = np.vstack(q_head)
-        # Standardize the data
-        scaler = StandardScaler()
-        q_proj_scaled = scaler.fit_transform(q_proj)
-
-        # Compute inertias and silhouette scores for different numbers of clusters
-        inertias = []
-        kmeans_silhouette_scores = []
-
-        for k in range(2, max_clusters + 1):
-            kmeans = KMeans(n_clusters=k, random_state=42)
-            kmeans.fit(q_proj_scaled)
-            inertias.append(kmeans.inertia_)
-            kmeans_silhouette_scores.append(
-                silhouette_score(q_proj_scaled, kmeans.labels_)
-            )
-
+        inertias, silhouette_scores = (
+            organized_results[(i, j)]["inertias"],
+            organized_results[(i, j)]["scores"],
+        )
         # Plot elbow curve
         plt.figure(figsize=(12, 5))
         plt.subplot(121)
@@ -197,7 +179,7 @@ for i, layer_projs in enumerate(projs_per_layer):
         plt.subplot(122)
         plt.plot(
             range(2, max_clusters + 1),
-            kmeans_silhouette_scores,
+            silhouette_scores,
             marker="o",
             label="K-means",
         )
@@ -212,21 +194,6 @@ for i, layer_projs in enumerate(projs_per_layer):
         plt.show()
 
         # Determine optimal number of clusters for each method
-        kmeans_optimal = (
-            kmeans_silhouette_scores.index(max(kmeans_silhouette_scores)) + 2
-        )
-
-        print(f"Optimal clusters (K-means): {kmeans_optimal}")
-
-        # Perform clustering with optimal number and visualize
-        kmeans = KMeans(n_clusters=kmeans_optimal, random_state=42, n_init=10)
-        kmeans_labels = kmeans.fit_predict(q_proj_scaled)
-
-        # Use PCA to reduce to 2D for visualization
-        from sklearn.decomposition import PCA
-
-        pca = PCA(n_components=2)
-        queries_2d = pca.fit_transform(q_proj_scaled)
 
         plt.figure(figsize=(10, 8))
         scatter = plt.scatter(
@@ -234,13 +201,11 @@ for i, layer_projs in enumerate(projs_per_layer):
         )
         plt.colorbar(scatter)
         plt.title(
-            f"Query Clusters for layer {i} head {j}\n(Optimal clusters: {kmeans_optimal})"
+            f"Query Clusters for layer {i} head {j}\n(Optimal clusters: {optimal})"
         )
         plt.xlabel("First Principal Component")
         plt.ylabel("Second Principal Component")
         plt.show()
 
-# %%
-1024 * 768
 
 # %%
