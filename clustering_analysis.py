@@ -1,4 +1,5 @@
 # %%
+import os
 import time
 import torch
 from datasets import load_dataset
@@ -112,8 +113,6 @@ for i, (name, samples_out) in enumerate(all_intermediates.items()):
         for j in range(num_heads):
             q_head = q[:, j, :]
             projs_per_layer[i][j].append(q_head.numpy())
-# %%
-projs_per_layer
 
 
 # %%
@@ -147,7 +146,7 @@ def get_optimal_clusters(q_head):
     return results, inertias, optimal_k_ch, optimal_k_db
 
 
-def plot_inertia(inertias):
+def plot_results(inertias, results):
     # Plot elbow curve
     plt.figure(figsize=(12, 5))
     plt.subplot(131)
@@ -156,41 +155,104 @@ def plot_inertia(inertias):
     plt.ylabel("Inertia")
     plt.title("Elbow Method")
 
-
-def plot_scores(results, score_type, plot_num):
-    scores = [result[score_type] for result in results]
-
-    # Plot silhouette scores
-    plt.subplot(p_num)
-    plt.plot(
-        range(2, 2 + len(scores)),
-        scores,
-        marker="o",
-        label="K-means",
-    )
-    plt.xlabel("Number of clusters")
-    plt.ylabel(f"{score_type}")
-    plt.title(f"{score_type}s")
+    for i, score_type in enumerate(["ch_score", "db_score"]):
+        scores = [result[score_type] for result in results]
+        # Plot silhouette scores
+        plt.subplot(132 + i)
+        plt.plot(
+            range(2, 2 + len(scores)),
+            scores,
+            marker="o",
+            label="K-means",
+        )
+        plt.xlabel("Number of clusters")
+        plt.ylabel(f"{score_type}")
+        plt.title(f"{score_type}s")
     plt.legend()
     plt.show()
 
-    plt.tight_layout()
-    plt.show()
 
-
-def plot_optimal(q_head_scaled, queries_2d, optimal):
+def plot_optimal(q_head_scaled, queries_3d, optimal):
     kmeans = KMeans(n_clusters=optimal, random_state=42, n_init=10)
     kmeans_labels = kmeans.fit_predict(q_head_scaled)
 
-    plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(
-        queries_2d[:, 0], queries_2d[:, 1], c=kmeans_labels, cmap="viridis"
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection="3d")
+    scatter = ax.scatter(
+        queries_3d[:, 0],
+        queries_3d[:, 1],
+        queries_3d[:, 2],
+        c=kmeans_labels,
+        cmap="viridis",
     )
-    plt.colorbar(scatter)
-    plt.title(f"Query Clusters for layer {i} head {j}\n(Optimal clusters: {optimal})")
-    plt.xlabel("First Principal Component")
-    plt.ylabel("Second Principal Component")
+    fig.colorbar(scatter)
+    ax.set_title(
+        f"Query Clusters for layer {i} head {j}\n(Optimal clusters: {optimal})"
+    )
+    ax.set_xlabel("First Principal Component")
+    ax.set_ylabel("Second Principal Component")
+    ax.set_zlabel("Third Principal Component")
     plt.show()
+
+
+# %%
+import plotly.graph_objects as go
+
+
+def ensure_figs_folder():
+    if not os.path.exists("figs"):
+        os.makedirs("figs")
+
+
+def plot_optimal_3d(q_head_scaled, queries_3d, optimal, i, j):
+    ensure_figs_folder()
+
+    # Ensure we have data to plot
+    kmeans = KMeans(n_clusters=optimal, random_state=42, n_init=10)
+    kmeans_labels = kmeans.fit_predict(q_head_scaled)
+
+    max_points = 100000  # Adjust this value based on your system's capabilities
+    indices = np.random.choice(
+        queries_3d.shape[0], min(max_points, queries_3d.shape[0]), replace=False
+    )
+    queries_3d_sample = queries_3d[indices]
+    kmeans_labels_sample = kmeans_labels[indices]
+
+    # Debug: Check kmeans labels
+    print(f"Unique cluster labels: {np.unique(kmeans_labels)}")
+
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=queries_3d_sample[:, 0],
+                y=queries_3d_sample[:, 1],
+                z=queries_3d_sample[:, 2],
+                mode="markers",
+                marker=dict(
+                    size=5,
+                    color=kmeans_labels_sample,
+                    colorscale="Viridis",
+                    opacity=0.8,
+                ),
+            )
+        ]
+    )
+
+    fig.update_layout(
+        title=f"Query Clusters for layer {i} head {j}<br>(Optimal clusters: {optimal})",
+        scene=dict(
+            xaxis_title="First Principal Component",
+            yaxis_title="Second Principal Component",
+            zaxis_title="Third Principal Component",
+        ),
+        width=900,
+        height=700,
+    )
+
+    filename = f"figs/cluster_plot_layer_{i}_head_{j}_k_{optimal}.html"
+    fig.write_html(filename)
+    print(f"Plot saved as {filename}")
+    fig.show()
 
 
 # %%
@@ -202,17 +264,14 @@ for i, layer_projs in enumerate(projs_per_layer):
         q_head_scaled = scaler.fit_transform(q_proj)
 
         # Use PCA to reduce to 2D for visualization
-        pca = PCA(n_components=2)
-        queries_2d = pca.fit_transform(q_head_scaled)
+        pca = PCA(n_components=3)
+        queries_3d = pca.fit_transform(q_head_scaled)
 
         results, inertias, optimal_k_ch, optimal_k_db = get_optimal_clusters(
             q_head_scaled
         )
-        plot_inertia(inertias)
-        for score_type, p_num in [("ch_score", 132), ("db_score", 133)]:
-            plot_scores(results, score_type=score_type, plot_num=p_num)
+        plot_results(inertias, results)
         for optimal in [optimal_k_ch, optimal_k_db]:
-            plot_optimal(q_head_scaled, queries_2d, optimal)
-
+            plot_optimal_3d(q_head_scaled, queries_3d, optimal, i, j)
 
 # %%
