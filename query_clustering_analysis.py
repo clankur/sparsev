@@ -120,31 +120,40 @@ def plot_cluster(layer_idx, head_idx, query_data, num_clusters):
     queries = np.vstack(queries)
     alignments = np.concatenate(alignments)
 
+    # Use PCA to reduce to 2D for visualization
     pca = PCA(n_components=2)
     queries_2d = pca.fit_transform(queries)
 
-    fig = go.Figure()
-    for i in range(num_clusters):
-        mask = alignments == i
-        fig.add_trace(
-            go.Scatter(
-                x=queries_2d[mask, 0],
-                y=queries_2d[mask, 1],
-                mode="markers",
-                name=f"Vector {i}",
-                marker=dict(size=5),
-            )
-        )
+    plt.figure(figsize=(12, 10))
+    scatter = plt.scatter(
+        queries_2d[:, 0],
+        queries_2d[:, 1],
+        c=alignments,
+        cmap="viridis",
+        alpha=0.6,
+    )
+    plt.colorbar(scatter, label="Aligned Vector Index")
+    plt.title(f"Query Clusters - Layer {layer_idx}, Head {head_idx}")
+    plt.xlabel("First Principal Component")
+    plt.ylabel("Second Principal Component")
 
-    fig.update_layout(
-        title=f"Query Clusters - Layer {layer_idx}, Head {head_idx}",
-        xaxis_title="First Principal Component",
-        yaxis_title="Second Principal Component",
-        width=600,
-        height=500,
+    # Add a legend
+    handles = [
+        plt.scatter(
+            [],
+            [],
+            c=[plt.cm.viridis(i / num_clusters)],
+            label=f"Vector {i}",
+        )
+        for i in range(num_clusters)
+    ]
+    plt.legend(
+        handles=handles,
+        title="Aligned Vector",
     )
 
-    fig.show()
+    plt.tight_layout()
+    plt.show()
 
 
 def plot_query_clusters(query_data, model, num_heads, num_random_vectors):
