@@ -1,4 +1,5 @@
 # %%
+import random
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -8,9 +9,8 @@ from enum import Enum
 from collections import defaultdict
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
-import io
-import base64
-from IPython.display import HTML, display
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 # %%
@@ -115,43 +115,46 @@ def process_intermediates(
 
 
 # %%
-def plot_query_clusters(query_data, model, num_heads, num_random_vectors):
-    for layer_idx in range(model.config.n_layer):
-        for head_idx in range(num_heads):
-            queries = []
-            alignments = []
-            for q, a in query_data[(layer_idx, head_idx)]:
-                queries.append(q)
-                alignments.append(a)
+def plot_cluster(layer_idx, head_idx, query_data, num_clusters):
+    queries = []
+    alignments = []
+    for q, a in query_data[(layer_idx, head_idx)]:
+        queries.append(q)
+        alignments.append(a)
 
-            queries = np.vstack(queries)
-            alignments = np.concatenate(alignments)
+    queries = np.vstack(queries)
+    alignments = np.concatenate(alignments)
 
-            pca = PCA(n_components=2)
-            queries_2d = pca.fit_transform(queries)
+    pca = PCA(n_components=2)
+    queries_2d = pca.fit_transform(queries)
 
-            fig = go.Figure()
-            for i in range(num_random_vectors):
-                mask = alignments == i
-                fig.add_trace(
-                    go.Scatter(
-                        x=queries_2d[mask, 0],
-                        y=queries_2d[mask, 1],
-                        mode="markers",
-                        name=f"Vector {i}",
-                        marker=dict(size=5),
-                    )
-                )
-
-            fig.update_layout(
-                title=f"Query Clusters - Layer {layer_idx}, Head {head_idx}",
-                xaxis_title="First Principal Component",
-                yaxis_title="Second Principal Component",
-                width=600,
-                height=500,
+    fig = go.Figure()
+    for i in range(num_clusters):
+        mask = alignments == i
+        fig.add_trace(
+            go.Scatter(
+                x=queries_2d[mask, 0],
+                y=queries_2d[mask, 1],
+                mode="markers",
+                name=f"Vector {i}",
+                marker=dict(size=5),
             )
+        )
 
-            fig.show()
+    fig.update_layout(
+        title=f"Query Clusters - Layer {layer_idx}, Head {head_idx}",
+        xaxis_title="First Principal Component",
+        yaxis_title="Second Principal Component",
+        width=600,
+        height=500,
+    )
+
+    fig.show()
+
+
+def plot_query_clusters(query_data, model, num_heads, num_random_vectors):
+    for layer_idx, head_idx in query_data.keys():
+        plot_cluster(layer_idx, head_idx, query_data, num_random_vectors)
 
 
 # %%
@@ -181,6 +184,8 @@ def main():
         head_dim,
         num_random_vectors,
     )
+    sampled_data = random.sample(sorted(query_data), min(24, len(query_data)))
+    query_data = {key: query_data[key] for key in sorted(sampled_data)}
     plot_query_clusters(query_data, model, num_heads, num_random_vectors)
 
 
