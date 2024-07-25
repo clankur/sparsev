@@ -188,7 +188,7 @@ def main():
         head_dim,
         num_random_vectors,
     )
-    sampled_data = random.sample(sorted(query_data), min(24, len(query_data)))
+    sampled_data = random.sample(sorted(query_data), min(12, len(query_data)))
     query_data = {key: query_data[key] for key in sorted(sampled_data)}
     plot_query_clusters(query_data, model, num_heads, num_random_vectors)
 
