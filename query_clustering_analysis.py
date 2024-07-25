@@ -88,14 +88,9 @@ def process_intermediates(
 
             for head_idx in range(num_heads):
                 q_head = q[:, head_idx, :]
-                print(f"{q_head.shape=}")
 
                 dots = torch.matmul(q_head, random_vectors[layer_idx].T)
                 max_dots, max_indices = torch.max(dots, dim=1)
-                print(
-                    f"Layer {layer_idx}, Head {head_idx} aligned with {max_indices} with align of {max_dots}"
-                )
-                print(f"{max_dots.shape}")
                 for vec_idx in range(num_random_vectors):
                     mask = max_indices == vec_idx
                     if mask.any():
