@@ -7,6 +7,10 @@ import numpy as np
 from enum import Enum
 from collections import defaultdict
 from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+import io
+import base64
+from IPython.display import HTML, display
 
 
 # %%
@@ -111,58 +115,43 @@ def process_intermediates(
 
 
 # %%
-def plot_query_clusters(
-    query_data, model, num_heads, num_random_vectors, alternate=True
-):
+def plot_query_clusters(query_data, model, num_heads, num_random_vectors):
     for layer_idx in range(model.config.n_layer):
-        if alternate and not layer_idx % 2:
+        for head_idx in range(num_heads):
+            queries = []
+            alignments = []
+            for q, a in query_data[(layer_idx, head_idx)]:
+                queries.append(q)
+                alignments.append(a)
 
-            for head_idx in range(num_heads):
-                queries = []
-                alignments = []
-                for q, a in query_data[(layer_idx, head_idx)]:
-                    queries.append(q)
-                    alignments.append(a)
+            queries = np.vstack(queries)
+            alignments = np.concatenate(alignments)
 
-                queries = np.vstack(queries)
-                alignments = np.concatenate(alignments)
+            pca = PCA(n_components=2)
+            queries_2d = pca.fit_transform(queries)
 
-                # Use PCA to reduce to 2D for visualization
-                pca = PCA(n_components=2)
-                queries_2d = pca.fit_transform(queries)
-
-                plt.figure(figsize=(12, 10))
-                scatter = plt.scatter(
-                    queries_2d[:, 0],
-                    queries_2d[:, 1],
-                    c=alignments,
-                    cmap="viridis",
-                    alpha=0.6,
-                )
-                plt.colorbar(scatter, label="Aligned Vector Index")
-                plt.title(f"Query Clusters - Layer {layer_idx}, Head {head_idx}")
-                plt.xlabel("First Principal Component")
-                plt.ylabel("Second Principal Component")
-
-                # Add a legend
-                handles = [
-                    plt.scatter(
-                        [],
-                        [],
-                        c=[plt.cm.viridis(i / num_random_vectors)],
-                        label=f"Vector {i}",
+            fig = go.Figure()
+            for i in range(num_random_vectors):
+                mask = alignments == i
+                fig.add_trace(
+                    go.Scatter(
+                        x=queries_2d[mask, 0],
+                        y=queries_2d[mask, 1],
+                        mode="markers",
+                        name=f"Vector {i}",
+                        marker=dict(size=5),
                     )
-                    for i in range(num_random_vectors)
-                ]
-                plt.legend(
-                    handles=handles,
-                    title="Aligned Vector",
-                    loc="center left",
-                    bbox_to_anchor=(1, 0.5),
                 )
 
-                plt.tight_layout()
-                plt.show()
+            fig.update_layout(
+                title=f"Query Clusters - Layer {layer_idx}, Head {head_idx}",
+                xaxis_title="First Principal Component",
+                yaxis_title="Second Principal Component",
+                width=600,
+                height=500,
+            )
+
+            fig.show()
 
 
 # %%
