@@ -65,40 +65,36 @@ config
 for name, module in model.named_modules():
     print(name)
 # %%
-num_of_samples = 150
+num_of_samples = 1000
 # %%
 stream = iter(dataset["train"])
 
 # %%
-min_seq_len = 1024
+seq_len = 1024
 top_ks = [1, 5, 10, 20]
 metric_cumsums = [80, 90, 95, 99]
 samples_metrics = list()
 cumsum_metrics = {
-    "best": torch.zeros((config.n_layer, config.n_head, min_seq_len)),
-    "avg": torch.zeros((config.n_layer, config.n_head, min_seq_len)),
-    "worst": torch.ones((config.n_layer, config.n_head, min_seq_len)),
+    "best": torch.zeros((config.n_layer, config.n_head, seq_len)),
+    "avg": torch.zeros((config.n_layer, config.n_head, seq_len)),
+    "worst": torch.ones((config.n_layer, config.n_head, seq_len)),
 }
 
 
 # %%
 for i in range(num_of_samples):
-    input_text = next(stream)["text"]
-    inputs = tokenizer(input_text, return_tensors="pt")
-    sequence_length = inputs.input_ids.shape[1]
+    cur_seq_len = 0
 
-    while sequence_length <= min_seq_len:
-        inputs = tokenizer(input_text, return_tensors="pt")
+    while cur_seq_len <= seq_len:
         input_text = next(stream)["text"]
-        sequence_length = inputs.input_ids.shape[1]
+        inputs = tokenizer(input_text, return_tensors="pt")
+        cur_seq_len = inputs.input_ids.shape[1]
 
     # cap length of input to min sequence length tokens
     inputs_sliced = {
-        "input_ids": inputs.input_ids[:, :min_seq_len],
-        "attention_mask": inputs.attention_mask[:, :min_seq_len],
+        "input_ids": inputs.input_ids[:, :seq_len],
+        "attention_mask": inputs.attention_mask[:, :seq_len],
     }
-
-    sequence_length = inputs_sliced["input_ids"].shape[1]
 
     metrics = defaultdict(
         lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: 0.0)))
@@ -115,10 +111,6 @@ for i in range(num_of_samples):
     cumsum_metrics["avg"] += cum_prob
     cumsum_metrics["best"] = torch.max(cumsum_metrics["best"], cum_prob)
     cumsum_metrics["worst"] = torch.min(cumsum_metrics["worst"], cum_prob)
-
-    # print(f"{cumsum_metrics["avg"][0, 0, :100]}")
-    # print(f"{cumsum_metrics["best"][0, 0, :100]}")
-    # print(f"{cumsum_metrics["worst"][0, 0, :100]}")
 
 # %%
 cumsum_metrics["avg"] = cumsum_metrics["avg"] / num_of_samples
@@ -161,7 +153,6 @@ def plot_confidence_heatmaps(avg_cumsum_metrics):
 
 
 # %%
-
 avg_cumsum_metrics_np = cumsum_metrics["avg"].numpy()
 avg_cumsum_metrics_np[0, 0, :]
 # %%
@@ -202,4 +193,5 @@ def plot_confidence_linechart(cumsum_metrics):
 
 # %%
 plot_confidence_linechart(avg_cumsum_metrics_np)
+
 # %%
