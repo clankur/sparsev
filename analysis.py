@@ -42,7 +42,7 @@ def get_tokenizer_model(model_type: ModelTypes):
 def get_model_config(
     model_type: ModelTypes, model: Union[LlamaModel, GPT2Model, PreTrainedModel]
 ) -> SimpleNamespace:
-    if model_type == ModelTypes.LLAMA:
+    if model_type == ModelTypes.LLAMA or model_type == ModelTypes.GEMMA:
         return SimpleNamespace(
             n_layer=model.config.num_hidden_layers,
             n_head=model.config.num_attention_heads,
@@ -50,13 +50,14 @@ def get_model_config(
     elif model_type == ModelTypes.GPT2:
         return SimpleNamespace(n_layer=model.config.n_layer, n_head=model.config.n_head)
     else:
+        print(model.config)
         raise ValueError("Model type not supported")
 
 
 # %%
 dataset = get_dataset(DatasetTypes.INTERNET)
 # %%
-model_type = ModelTypes.GPT2
+model_type = ModelTypes.GEMMA
 tokenizer, model = get_tokenizer_model(model_type)
 config = get_model_config(model_type, model)
 config
