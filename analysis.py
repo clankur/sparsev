@@ -56,14 +56,10 @@ def get_model_config(
 # %%
 dataset = get_dataset(DatasetTypes.INTERNET)
 # %%
-# Load tokenizer and model
 model_type = ModelTypes.GPT2
 tokenizer, model = get_tokenizer_model(model_type)
 config = get_model_config(model_type, model)
 config
-# %%
-for name, module in model.named_modules():
-    print(name)
 # %%
 num_of_samples = 1000
 # %%
