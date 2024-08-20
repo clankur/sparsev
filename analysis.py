@@ -74,7 +74,7 @@ cumsum_metrics = {
 layer_cumsum_metrics = {
     "best": torch.zeros((config.n_layer, config.n_head * seq_len)),
     "avg": torch.zeros((config.n_layer, config.n_head * seq_len)),
-    "worst": torch.ones((config.n_layer, config.n_head * seq_len)),
+    "worst": torch.full((config.n_layer, config.n_head * seq_len), torch.inf),
 }
 
 # %%
@@ -128,6 +128,10 @@ cumsum_metrics["avg"] = cumsum_metrics["avg"] / num_of_samples
 layer_cumsum_metrics["avg"] = (
     layer_cumsum_metrics["avg"] / num_of_samples / config.n_head
 )
+
+layer_cumsum_metrics["best"] = layer_cumsum_metrics["best"] / config.n_head
+layer_cumsum_metrics["worst"] = layer_cumsum_metrics["worst"] / config.n_head
+
 # %%
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -169,7 +173,12 @@ def plot_cum_layer_prob(layer_metrics):
 
 
 # %%
+layer_cumsum_metrics["worst"], layer_cumsum_metrics["best"],
+
+# %%
 plot_cum_layer_prob(layer_cumsum_metrics["avg"].numpy())
+plot_cum_layer_prob((layer_cumsum_metrics["worst"]).numpy())
+plot_cum_layer_prob((layer_cumsum_metrics["best"]).numpy())
 
 
 # %%
@@ -303,13 +312,19 @@ def plot_tokens_required_for_threshold(cumsum_metrics, threshold):
 
 
 # %%
+
+avg_layer_cumprob_np = layer_cumsum_metrics["avg"].numpy()
+best_layer_cumprob_np = layer_cumsum_metrics["best"].numpy()
+worst_layer_cumprob_np = layer_cumsum_metrics["worst"].numpy()
+total_k_len = config.n_head * seq_len
 probability_thresholds = [80, 90, 95, 99, 99.9]
 for threshold in probability_thresholds:
     p_threshold = threshold / 100
-    tokens_need_for_threshold = np.sum(avg_cumsum_metrics_np <= p_threshold, axis=-1)
+    tokens_need_for_threshold = np.sum(avg_layer_cumprob_np <= p_threshold, axis=-1)
     # plot_tokens_required_for_threshold(tokens_need_for_threshold, threshold)
+
     print(
-        f"for {threshold} % probability average :\n {np.mean(tokens_need_for_threshold)=}"
+        f"percentage of keys needed for {threshold} % probability :\n {tokens_need_for_threshold / total_k_len * 100}"
     )
 
 # %%
