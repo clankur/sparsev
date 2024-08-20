@@ -9,6 +9,9 @@ from types import SimpleNamespace
 from typing import Union
 from collections import defaultdict
 
+# %%
+deep_dive_heads = False
+
 
 # %%
 class DatasetTypes(Enum):
@@ -66,10 +69,17 @@ stream = iter(dataset["train"])
 
 # %%
 seq_len = config.seq_len
-cumsum_metrics = {
-    "best": torch.zeros((config.n_layer, config.n_head, seq_len)),
-    "avg": torch.zeros((config.n_layer, config.n_head, seq_len)),
-    "worst": torch.ones((config.n_layer, config.n_head, seq_len)),
+head_metrics = {
+    "cum_prob": {
+        "best": torch.zeros((config.n_layer, config.n_head, seq_len)),
+        "avg": torch.zeros((config.n_layer, config.n_head, seq_len)),
+        "worst": torch.ones((config.n_layer, config.n_head, seq_len)),
+    },
+    "att_wei": {
+        "best": torch.zeros((config.n_layer, config.n_head, seq_len)),
+        "avg": torch.zeros((config.n_layer, config.n_head, seq_len)),
+        "worst": torch.ones((config.n_layer, config.n_head, seq_len)),
+    },
 }
 layer_cumsum_metrics = {
     "best": torch.zeros((config.n_layer, config.n_head * seq_len)),
@@ -102,6 +112,15 @@ for i in range(num_of_samples):
 
     attentions = torch.cat(outputs.attentions, dim=0)
     att_wei = attentions[:, :, -1, :]  # get query projection
+
+    head_metrics["att_wei"]["avg"] += att_wei
+    head_metrics["att_wei"]["best"] = torch.max(
+        att_wei, head_metrics["att_wei"]["best"]
+    )
+    head_metrics["att_wei"]["worst"] = torch.min(
+        att_wei, head_metrics["att_wei"]["worst"]
+    )
+
     layer_att_wei = torch.reshape(att_wei, (config.n_layer, config.n_head * seq_len))
 
     att_wei = torch.sort(att_wei, dim=-1, descending=True).values
@@ -110,9 +129,13 @@ for i in range(num_of_samples):
     cum_prob = att_wei.cumsum(dim=-1)
     cum_layer_prob = layer_att_wei.cumsum(dim=-1)
 
-    cumsum_metrics["avg"] += cum_prob
-    cumsum_metrics["best"] = torch.max(cumsum_metrics["best"], cum_prob)
-    cumsum_metrics["worst"] = torch.min(cumsum_metrics["worst"], cum_prob)
+    head_metrics["cum_prob"]["avg"] += cum_prob
+    head_metrics["cum_prob"]["best"] = torch.max(
+        head_metrics["cum_prob"]["best"], cum_prob
+    )
+    head_metrics["cum_prob"]["worst"] = torch.min(
+        head_metrics["cum_prob"]["worst"], cum_prob
+    )
 
     layer_cumsum_metrics["avg"] += cum_layer_prob
     layer_cumsum_metrics["best"] = torch.max(
@@ -124,7 +147,8 @@ for i in range(num_of_samples):
 
 
 # %%
-cumsum_metrics["avg"] = cumsum_metrics["avg"] / num_of_samples
+head_metrics["att_wei"]["avg"] = head_metrics["att_wei"]["avg"] / num_of_samples
+head_metrics["cum_prob"]["avg"] = head_metrics["cum_prob"]["avg"] / num_of_samples
 layer_cumsum_metrics["avg"] = (
     layer_cumsum_metrics["avg"] / num_of_samples / config.n_head
 )
@@ -158,7 +182,7 @@ def plot_cum_layer_prob(layer_metrics):
         )
 
     plt.title(f"Cumulative probability for all layers", fontsize=16)
-    plt.xlabel("Number of keys processed", fontsize=12)
+    plt.xlabel("Number of keys", fontsize=12)
     plt.ylabel("Cumulative probability", fontsize=12)
     plt.ylim(0, 1)  # Assuming cumulative values are between 0 and 1
     plt.minorticks_on()
@@ -173,17 +197,14 @@ def plot_cum_layer_prob(layer_metrics):
 
 
 # %%
-layer_cumsum_metrics["worst"], layer_cumsum_metrics["best"],
-
-# %%
-plot_cum_layer_prob(layer_cumsum_metrics["avg"].numpy())
-plot_cum_layer_prob((layer_cumsum_metrics["worst"]).numpy())
-plot_cum_layer_prob((layer_cumsum_metrics["best"]).numpy())
+for k in layer_cumsum_metrics.keys():
+    print(f"{k} cum prob across layers")
+    plot_cum_layer_prob(layer_cumsum_metrics[k].numpy())
 
 
 # %%
-def plot_cum_prob_per_layer(cumsum_metrics):
-    num_layers, num_heads, seq_length = cumsum_metrics.shape
+def plot_cum_prob_per_head(head_metrics):
+    num_layers, num_heads, seq_length = head_metrics.shape
 
     # Create a color map for the heads
     colors = plt.cm.rainbow(np.linspace(0, 1, num_heads))
@@ -194,7 +215,7 @@ def plot_cum_prob_per_layer(cumsum_metrics):
 
         for head in range(num_heads):
             # Get data for the current head
-            head_data = cumsum_metrics[layer, head, :]
+            head_data = head_metrics[layer, head, :]
 
             # Plot the line for this head
             plt.plot(
@@ -202,7 +223,7 @@ def plot_cum_prob_per_layer(cumsum_metrics):
             )
 
         plt.title(f"Cumulative probability for Layer {layer}", fontsize=16)
-        plt.xlabel("Number of keys processed", fontsize=12)
+        plt.xlabel("Number of keys", fontsize=12)
         plt.ylabel("Cumulative probability", fontsize=12)
         plt.ylim(0, 1)  # Assuming cumulative values are between 0 and 1
 
@@ -214,15 +235,32 @@ def plot_cum_prob_per_layer(cumsum_metrics):
 
 
 # %%
-plot_cum_prob_per_layer(cumsum_metrics["avg"].numpy())
+plot_cum_prob_per_head(head_metrics["cum_prob"]["avg"].numpy())
 
 
 # %%
-def plot_cum_probability_linechart_per_head(cumsum_metrics):
+avg_layer_cumprob_np = layer_cumsum_metrics["avg"].numpy()
+best_layer_cumprob_np = layer_cumsum_metrics["best"].numpy()
+worst_layer_cumprob_np = layer_cumsum_metrics["worst"].numpy()
+total_k_len = config.n_head * seq_len
+probability_thresholds = [80, 90, 95, 99, 99.9]
+for threshold in probability_thresholds:
+    p_threshold = threshold / 100
+    tokens_need_for_threshold = np.sum(avg_layer_cumprob_np <= p_threshold, axis=-1)
+
+    print(
+        f"percentage of keys needed for {threshold} % probability :\n {tokens_need_for_threshold / total_k_len * 100}"
+    )
+
+# %%
+
+
+# %%
+def plot_cum_prob_per_head_detailed(head_metrics):
     avg_metrics, best_metrics, worst_metrics = (
-        cumsum_metrics["avg"].numpy(),
-        cumsum_metrics["best"].numpy(),
-        cumsum_metrics["worst"].numpy(),
+        head_metrics["avg"].numpy(),
+        head_metrics["best"].numpy(),
+        head_metrics["worst"].numpy(),
     )
     num_layers, num_heads, seq_length = avg_metrics.shape
 
@@ -279,105 +317,56 @@ def plot_cum_probability_linechart_per_head(cumsum_metrics):
 
 
 # %%
-plot_cum_probability_linechart_per_head(cumsum_metrics)
+if deep_dive_heads:
+    plot_cum_prob_per_head_detailed(head_metrics["cum_prob"])
 
 
 # %%
-def plot_tokens_required_for_threshold(cumsum_metrics, threshold):
-    avg_metrics, best_metrics, worst_metrics = (
-        cumsum_metrics["avg"],
-        cumsum_metrics["best"],
-        cumsum_metrics["worst"],
+def plot_att_wei_heatmap(att_wei_metric):
+    num_layers, num_heads, seq_length = att_wei_metric.shape
+    num_layers = 2
+    # Create a figure with subplots for each layer
+    fig, axes = plt.subplots(num_layers, 1, figsize=(15, 5 * num_layers))
+    plt.subplots_adjust(top=0.95)
+    fig.suptitle(
+        "Confidence Probabilities Heatmap for Each Layer and Head (Log-transformed Data)",
+        fontsize=16,
+        y=1,
     )
-    num_layers, num_heads = avg_metrics.shape
 
     for layer in range(num_layers):
-        # Create a new figure for each layer
+        # Get data for the current layer
+        layer_data = att_wei_metric[layer]
 
-        layer_data = cumsum_metrics[layer, :]
+        # Apply log transformation to the data
+        # We use -np.log10(x) to invert the scale, so smaller values appear more distinct
+        # Add a small constant to avoid log(0), and clip to avoid infinities
+        log_data = -np.log10(np.clip(layer_data, 1e-10, 1.0))
 
-        plt.figure(figsize=(10, 6))
-        plt.hist(layer_data, bins=30, edgecolor="black")
-        plt.title(
-            "Frequency distribution tokens needed for {} for Layer {}".format(
-                threshold, layer
-            ),
-            fontsize=20,
+        # Normalize log_data to [0, 1] for consistent color scaling
+        log_data_norm = (log_data - log_data.min()) / (log_data.max() - log_data.min())
+
+        # Create heatmap for the current layer
+        sns.heatmap(
+            log_data_norm,
+            ax=axes[layer],
+            cmap="viridis",
+            cbar_kws={
+                "label": "Confidence Probability",
+                "format": lambda x, _: f"{10**(-x * (log_data.max() - log_data.min()) - log_data.min()):.2e}",
+            },
+            vmin=0,
+            vmax=1,
         )
-        plt.xlabel("Tokens needed")
-        plt.ylabel("Frequency")
+        axes[layer].set_title(f"Layer {layer}")
+        axes[layer].set_xlabel("Sequence Position")
+        axes[layer].set_ylabel("Head")
 
-        plt.grid(True, alpha=0.3)
-        plt.show()
-
-
-# %%
-
-avg_layer_cumprob_np = layer_cumsum_metrics["avg"].numpy()
-best_layer_cumprob_np = layer_cumsum_metrics["best"].numpy()
-worst_layer_cumprob_np = layer_cumsum_metrics["worst"].numpy()
-total_k_len = config.n_head * seq_len
-probability_thresholds = [80, 90, 95, 99, 99.9]
-for threshold in probability_thresholds:
-    p_threshold = threshold / 100
-    tokens_need_for_threshold = np.sum(avg_layer_cumprob_np <= p_threshold, axis=-1)
-    # plot_tokens_required_for_threshold(tokens_need_for_threshold, threshold)
-
-    print(
-        f"percentage of keys needed for {threshold} % probability :\n {tokens_need_for_threshold / total_k_len * 100}"
-    )
-
-# %%
-
-# %%
+    plt.tight_layout()
+    plt.show()
 
 
 # %%
-def plot_cum_probability_linechart_per_layer(cumsum_metrics):
-    avg_metrics, best_metrics, worst_metrics = (
-        cumsum_metrics["avg"].numpy(),
-        cumsum_metrics["best"].numpy(),
-        cumsum_metrics["worst"].numpy(),
-    )
-
-    num_layers, num_heads, k_len = avg_metrics.shape
-    avg_metrics = avg_metrics.reshape((num_layers, num_heads * k_len))
-    avg_metrics = np.sort(avg_metrics, axis=-1)
-
-    for layer in range(num_layers):
-        # Create a new figure for each layer
-        plt.figure(figsize=(15, 8))
-        # Get data for the current head
-
-        avg_head_metrics = avg_metrics[layer, :]
-        best_head_metrics = best_metrics[layer, :]
-        worst_head_metrics = worst_metrics[layer, :]
-
-        colors = plt.cm.rainbow(np.linspace(0, 1, 3))
-
-        plt.plot(
-            range(num_heads * k_len),
-            avg_head_metrics,
-            color=colors[0],
-            label=f"average",
-        )
-
-        plt.title(f"Cumulative probability for Layer {layer} ", fontsize=16)
-        plt.xlabel("Sequence Position", fontsize=12)
-        plt.ylabel("Cumulative probability", fontsize=12)
-        plt.ylim(0, 1)  # Assuming cumulative values are between 0 and 1
-
-        # Add a legend
-        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0.0)
-
-        plt.minorticks_on()
-
-        plt.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.7)
-
-        plt.tight_layout()
-        plt.show()
-
-
-# %%
-plot_cum_probability_linechart_per_layer(cumsum_metrics)
-# %%
+plot_att_wei_heatmap(head_metrics["att_wei"]["worst"])
+plot_att_wei_heatmap(head_metrics["att_wei"]["avg"])
+plot_att_wei_heatmap(head_metrics["att_wei"]["best"])
