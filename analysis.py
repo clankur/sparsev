@@ -367,6 +367,6 @@ def plot_att_wei_heatmap(att_wei_metric):
 
 
 # %%
-plot_att_wei_heatmap(head_metrics["att_wei"]["worst"])
-plot_att_wei_heatmap(head_metrics["att_wei"]["avg"])
-plot_att_wei_heatmap(head_metrics["att_wei"]["best"])
+for k in head_metrics["att_wei"].keys():
+    print(f"{k} case")
+    plot_att_wei_heatmap(head_metrics["att_wei"][k])
