@@ -119,7 +119,7 @@ def get_model_config(
 deep_dive_heads = False
 seed = 0
 batch_size = 4
-num_of_samples = 25 
+num_of_samples = 192 
 dataset_type = DatasetTypes.CODE
 model_type = ModelTypes.TINY_LLAMA
 
