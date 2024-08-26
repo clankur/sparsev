@@ -118,8 +118,8 @@ def get_model_config(
 # %%
 deep_dive_heads = False
 seed = 0
-batch_size = 32
-num_of_samples = 100
+batch_size = 4
+num_of_samples = 25 
 dataset_type = DatasetTypes.CODE
 model_type = ModelTypes.TINY_LLAMA
 
@@ -158,20 +158,16 @@ start_time = time.time()
 for i in range(num_of_samples):
     cur_seq_len = 0
 
-    # while cur_seq_len <= seq_len:
     inputs = next(stream)
     inputs_sliced = {"input_ids": torch.stack(inputs)}
 
-    # %%
     with torch.no_grad():
         outputs = model(**inputs_sliced)
 
-    # %%
     attentions = torch.stack(outputs.attentions)
     attentions = rearrange(
         attentions, "layer B head q_len k_len -> B layer head q_len k_len"
     )
-    # %%
     att_wei = attentions[:, :, :, -1, :]  # get last query projection
 
     head_metrics["att_wei"]["avg"] += att_wei
@@ -211,10 +207,10 @@ print(f"Total time: {end_time - start_time}")
 # %%
 head_metrics["att_wei"]["avg"] = reduce(
     head_metrics["att_wei"]["avg"], "b layer head k_len -> layer head k_len", "sum"
-)
+) / num_of_samples / batch_size
 head_metrics["cum_prob"]["avg"] = reduce(
     head_metrics["cum_prob"]["avg"], "b layer head k_len -> layer head k_len", "sum"
-)
+) / num_of_samples / batch_size
 for k in head_metrics:
     head_metrics[k]["best"] = (
         reduce(
