@@ -24,7 +24,7 @@ class DatasetTypes(Enum):
 class ModelTypes(Enum):
     GPT2 = "gpt2"
     LLAMA = "meta-llama/Meta-Llama-3.1-8B"
-    GEMMA = "google/gemma-2-9b-it"
+    GEMMA = "google/gemma-2b"
     TINY_LLAMA = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 
@@ -119,9 +119,9 @@ def get_model_config(
 deep_dive_heads = False
 seed = 0
 batch_size = 4
-num_of_samples = 192 
+num_of_samples = 192
 dataset_type = DatasetTypes.CODE
-model_type = ModelTypes.TINY_LLAMA
+model_type = ModelTypes.GEMMA
 
 # %%
 tokenizer, model = get_tokenizer_model(model_type)
@@ -205,12 +205,20 @@ for i in range(num_of_samples):
 print(f"Total time: {end_time - start_time}")
 
 # %%
-head_metrics["att_wei"]["avg"] = reduce(
-    head_metrics["att_wei"]["avg"], "b layer head k_len -> layer head k_len", "sum"
-) / num_of_samples / batch_size
-head_metrics["cum_prob"]["avg"] = reduce(
-    head_metrics["cum_prob"]["avg"], "b layer head k_len -> layer head k_len", "sum"
-) / num_of_samples / batch_size
+head_metrics["att_wei"]["avg"] = (
+    reduce(
+        head_metrics["att_wei"]["avg"], "b layer head k_len -> layer head k_len", "sum"
+    )
+    / num_of_samples
+    / batch_size
+)
+head_metrics["cum_prob"]["avg"] = (
+    reduce(
+        head_metrics["cum_prob"]["avg"], "b layer head k_len -> layer head k_len", "sum"
+    )
+    / num_of_samples
+    / batch_size
+)
 for k in head_metrics:
     head_metrics[k]["best"] = (
         reduce(
