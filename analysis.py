@@ -52,8 +52,9 @@ class SeqLenFilterDataLoader(DataLoader):
         try:
             while True:
                 while len(batch) < self.true_batch_size:
-                    new_batch = next(itr)["input_ids"]
+                    new_batch = next(itr)
                     if new_batch:
+                        new_batch = new_batch["input_ids"]
                         batch.extend(new_batch)
                 yield batch[: self.true_batch_size]
                 batch = batch[self.true_batch_size :]
