@@ -1,109 +1,34 @@
 # %%
 import time
-import functools
 import torch
-from torch.utils.data import DataLoader
-from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
+from transformers import PreTrainedModel
 from transformers.models.llama import LlamaModel
 from transformers.models.gpt2 import GPT2Model
-from enum import Enum
 from types import SimpleNamespace
-from typing import Union, Dict
+from typing import Union
 from einops import rearrange, reduce
+import utils
+import importlib
+import os
+from pathlib import Path
+
+# %%
+importlib.reload(utils)
+global DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
+from utils import DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
+
+# Add after initial imports
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "tpu" if torch.backends.xla else "cpu"
+)
+print(f"Using device: {device}")
+
+# Add output directory setup
+output_dir = Path("output_plots")
+output_dir.mkdir(exist_ok=True)
 
 
 # %%
-class DatasetTypes(Enum):
-    WIKI = ("wikitext", "wikitext-2-raw-v1")
-    INTERNET = ("allenai/c4", "en")
-    CODE = "bigcode/starcoderdata"
-    ASSISTANT = "HuggingFaceH4/ultrachat_200k"
-
-
-class ModelTypes(Enum):
-    GPT2 = "gpt2"
-    LLAMA = "meta-llama/Meta-Llama-3.1-8B"
-    GEMMA = "google/gemma-2b"
-    TINY_LLAMA = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-
-
-class SeqLenFilterDataLoader(DataLoader):
-    def __init__(self, dataset, min_seq_len, true_batch_size, *args, **kwargs):
-        self.min_seq_len = min_seq_len
-        self.true_batch_size = true_batch_size
-        super().__init__(dataset, *args, collate_fn=self.collate_fn, **kwargs)
-
-    def collate_fn(self, batch):
-        filtered_batch = [
-            item for item in batch if item["input_ids"].size(1) >= self.min_seq_len
-        ]
-
-        if not filtered_batch:
-            return None
-
-        input_ids = [item["input_ids"].squeeze(0) for item in filtered_batch]
-
-        return {"input_ids": input_ids}
-
-    def __iter__(self):
-        itr = super().__iter__()
-        batch = []
-        try:
-            while True:
-                while len(batch) < self.true_batch_size:
-                    new_batch = next(itr)
-                    if new_batch:
-                        new_batch = new_batch["input_ids"]
-                        batch.extend(new_batch)
-                yield batch[: self.true_batch_size]
-                batch = batch[self.true_batch_size :]
-        except StopIteration:
-            print("out of elements in dataset")
-
-
-# %%
-def get_dataset(dataset_type: DatasetTypes, tokenizer):
-    if dataset_type == DatasetTypes.WIKI or dataset_type == DatasetTypes.INTERNET:
-        dataset = load_dataset(
-            dataset_type.value[0], dataset_type.value[1], streaming=True, split="train"
-        )
-
-    else:
-        dataset = load_dataset(dataset_type.value, streaming=True, split="train")
-
-    tokenize = functools.partial(
-        tokenizer,
-        padding=False,
-        truncation=True,
-        max_length=seq_len,
-        add_special_tokens=False,
-        return_token_type_ids=False,
-        return_attention_mask=False,
-        return_tensors="pt",
-    )
-    dataset = dataset.shuffle(seed=seed)
-    if dataset_type == DatasetTypes.CODE:
-        tokenized = dataset.select_columns(["content"]).map(
-            tokenize, input_columns=["content"], remove_columns=["content"]
-        )
-    else:
-        tokenized = dataset.select_columns(["text"]).map(
-            tokenize, input_columns=["text"], remove_columns=["text"]
-        )
-    dataloader = SeqLenFilterDataLoader(
-        tokenized, seq_len, true_batch_size=batch_size, batch_size=256
-    )
-    return iter(dataloader)
-
-
-def get_tokenizer_model(model_type: ModelTypes):
-    model_name = model_type.value
-    return AutoTokenizer.from_pretrained(
-        model_name
-    ), AutoModelForCausalLM.from_pretrained(model_name, output_attentions=True)
-
-
 def get_model_config(
     model_type: ModelTypes, model: Union[LlamaModel, GPT2Model, PreTrainedModel]
 ) -> SimpleNamespace:
@@ -119,19 +44,20 @@ def get_model_config(
 # %%
 deep_dive_heads = False
 seed = 0
-batch_size = 4
-num_of_samples = 192
+batch_size = 1
+num_of_samples = 50
 dataset_type = DatasetTypes.CODE
-model_type = ModelTypes.GEMMA
+model_type = ModelTypes.LLAMA
 
 # %%
 tokenizer, model = get_tokenizer_model(model_type)
+model = model.to(device)
 config = get_model_config(model_type, model)
-seq_len = config.seq_len
+seq_len = 4096
 config
 
 # %%
-stream = get_dataset(dataset_type, tokenizer)
+stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
 
 # %%
 head_metrics = {
@@ -160,7 +86,7 @@ for i in range(num_of_samples):
     cur_seq_len = 0
 
     inputs = next(stream)
-    inputs_sliced = {"input_ids": torch.stack(inputs)}
+    inputs_sliced = {"input_ids": torch.stack(inputs).to(device)}
 
     with torch.no_grad():
         outputs = model(**inputs_sliced)
@@ -260,7 +186,7 @@ import numpy as np
 
 
 # %%
-def plot_cum_layer_prob(layer_metrics):
+def plot_cum_layer_prob(layer_metrics, metric_name):
     n_layers, k_len = layer_metrics.shape
 
     # Create a color map for the
@@ -290,17 +216,20 @@ def plot_cum_layer_prob(layer_metrics):
     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0.0)
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig(
+        output_dir / f"layer_cum_prob_{metric_name}.png", bbox_inches="tight", dpi=300
+    )
+    plt.close()
 
 
 # %%
 for k in layer_cumsum_metrics.keys():
     print(f"{k} cum prob across layers")
-    plot_cum_layer_prob(layer_cumsum_metrics[k].numpy())
+    plot_cum_layer_prob(layer_cumsum_metrics[k].numpy(), k)
 
 
 # %%
-def plot_cum_prob_per_head(head_metrics):
+def plot_cum_prob_per_head(head_metrics, metric_name):
     num_layers, num_heads, seq_length = head_metrics.shape
 
     # Create a color map for the heads
@@ -328,11 +257,16 @@ def plot_cum_prob_per_head(head_metrics):
         plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0.0)
 
         plt.tight_layout()
-        plt.show()
+        plt.savefig(
+            output_dir / f"head_cum_prob_layer_{layer}_{metric_name}.png",
+            bbox_inches="tight",
+            dpi=300,
+        )
+        plt.close()
 
 
 # %%
-plot_cum_prob_per_head(head_metrics["cum_prob"]["avg"].numpy())
+plot_cum_prob_per_head(head_metrics["cum_prob"]["avg"].numpy(), "avg")
 
 
 # %%
@@ -408,7 +342,12 @@ def plot_cum_prob_per_head_detailed(head_metrics):
             plt.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.7)
 
             plt.tight_layout()
-            plt.show()
+            plt.savefig(
+                output_dir / f"head_detailed_layer_{layer}_head_{head}.png",
+                bbox_inches="tight",
+                dpi=300,
+            )
+            plt.close()
 
 
 # %%
@@ -420,7 +359,7 @@ if deep_dive_heads:
 from matplotlib.colors import SymLogNorm
 
 
-def plot_att_wei_heatmap(att_wei_metric):
+def plot_att_wei_heatmap(att_wei_metric, name=""):
     # Convert to numpy if it's a PyTorch tensor
     if isinstance(att_wei_metric, torch.Tensor):
         att_wei_metric = att_wei_metric.detach().cpu().numpy()
@@ -469,7 +408,10 @@ def plot_att_wei_heatmap(att_wei_metric):
         cbar.set_ticklabels([f"-{abs_max:.1e}", "-1e-5", "0", "1e-5", f"{abs_max:.1e}"])
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig(
+        output_dir / f"att_wei_heatmap_{name}.png", bbox_inches="tight", dpi=300
+    )
+    plt.close()
 
 
 def plot_att_wei_heatmap_single_layer(att_wei_metric, layer_index=0):
@@ -517,14 +459,11 @@ def plot_att_wei_heatmap_single_layer(att_wei_metric, layer_index=0):
 print(dataset_type.value)
 for k in head_metrics["att_wei"].keys():
     att_wei = head_metrics["att_wei"][k]
-    # print(f"{k} case")
-    # plot_att_wei_heatmap(att_wei)
     avg_att_wei = reduce(att_wei, "layer head k_len -> layer head", "mean").unsqueeze(
         -1
     )
-
     diff = (att_wei - avg_att_wei).numpy()
     print(f"{k} case distance from mean")
-    plot_att_wei_heatmap(diff)
+    plot_att_wei_heatmap(diff, f"{k}_diff")
 
 # %%
