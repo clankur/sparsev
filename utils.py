@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 
 class DatasetTypes(Enum):
-    WIKI = ("wikitext", "wikitext-2-raw-v1")
+    WIKI = ("Salesforce/wikitext", "wikitext-103-raw-v1")
     INTERNET = ("allenai/c4", "en")
     CODE = "bigcode/starcoderdata"
     ASSISTANT = "HuggingFaceH4/ultrachat_200k"
