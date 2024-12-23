@@ -18,7 +18,7 @@ class DatasetTypes(Enum):
 class ModelTypes(Enum):
     GPT2 = "gpt2"
     LLAMA = "meta-llama/Llama-3.2-1B"
-    GEMMA = "google/gemma-2b"
+    GEMMA = "google/gemma-2-2b"
     TINY_LLAMA = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 

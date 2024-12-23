@@ -53,15 +53,17 @@ def parse_args():
     parser.add_argument('--model', type=str, default='LLAMA',
                       choices=[mt.name for mt in ModelTypes],
                       help='Model type (default: LLAMA)')
+    parser.add_argument('--deep-dive-heads', type=bool, default=False,
+                      help='Deep dive analysis of heads (default: False)')
     return parser.parse_args()
 
-# Replace the existing variable assignments with:
 args = parse_args()
 seed = args.seed
 batch_size = args.batch_size
 num_of_samples = args.num_samples
 dataset_type = DatasetTypes[args.dataset]
 model_type = ModelTypes[args.model]
+deep_dive_heads = args.deep_dive_heads
 
 output_dir = Path(f"outputs/{dataset_type.value}/{model_type.value}")
 output_dir.mkdir(exist_ok=True, parents=True)
@@ -247,7 +249,7 @@ import pandas as pd
 def analyze_layer_thresholds(layer_metrics, metric_name, save_to_file=True):
     layer_metrics = layer_metrics[metric_name].cpu().numpy()
     n_layers, k_len = layer_metrics.shape
-    confidence_levels = [0.90, 0.95, 0.99, 0.999]
+    confidence_levels = [0.80, 0.90, 0.95, 0.99, 0.999]
     
     # Create DataFrame to store results
     results = []
@@ -263,14 +265,15 @@ def analyze_layer_thresholds(layer_metrics, metric_name, save_to_file=True):
         
         results.append({
             'Layer': layer,
-            '90%': thresholds[0],
-            '95%': thresholds[1],
-            '99%': thresholds[2],
-            '99.9%': thresholds[3],
-            '90% %': f'{(thresholds[0]/k_len)*100:.2f}%',
+            '80%': thresholds[0],
+            '90%': thresholds[1],
+            '95%': thresholds[2],
+            '99%': thresholds[3],
+            '99.9%': thresholds[4],
+            '80% %': f'{(thresholds[0]/k_len)*100:.2f}%',
             '95% %': f'{(thresholds[1]/k_len)*100:.2f}%',
             '99% %': f'{(thresholds[2]/k_len)*100:.2f}%',
-            '99.9% %': f'{(thresholds[3]/k_len)*100:.2f}%'
+            '99.9% %': f'{(thresholds[3]/k_len)*100:.2f}%',
         })
     
     # Convert to DataFrame and print
@@ -335,15 +338,6 @@ avg_layer_cumprob_np = layer_cumsum_metrics["avg"].cpu().numpy()
 best_layer_cumprob_np = layer_cumsum_metrics["best"].cpu().numpy()
 worst_layer_cumprob_np = layer_cumsum_metrics["worst"].cpu().numpy()
 total_k_len = config.n_head * seq_len
-probability_thresholds = [80, 90, 95, 99, 99.9]
-for threshold in probability_thresholds:
-    p_threshold = threshold / 100
-    tokens_need_for_threshold = np.sum(avg_layer_cumprob_np <= p_threshold, axis=-1)
-
-    print(
-        f"percentage of keys needed for {threshold} % probability :\n {tokens_need_for_threshold / total_k_len * 100}"
-    )
-
 
 # %%
 def plot_cum_prob_per_head_detailed(head_metrics):
