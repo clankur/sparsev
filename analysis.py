@@ -45,6 +45,8 @@ def parse_args():
                       help='Random seed (default: 0)')
     parser.add_argument('--batch-size', type=int, default=1,
                       help='Batch size (default: 1)')
+    parser.add_argument('--seq-len', type=int, default=1024,
+                      help='Sequence length (default: 1024)')
     parser.add_argument('--num-samples', type=int, default=192,
                       help='Number of samples to process (default: 192)')
     parser.add_argument('--dataset', type=str, default='SLIM_PAJAMA',
@@ -64,8 +66,9 @@ num_of_samples = args.num_samples
 dataset_type = DatasetTypes[args.dataset]
 model_type = ModelTypes[args.model]
 deep_dive_heads = args.deep_dive_heads
+seq_len = args.seq_len
 
-output_dir = Path(f"outputs/{dataset_type.value}/{model_type.value}")
+output_dir = Path(f"outputs/{dataset_type.name}/{model_type.value}")
 output_dir.mkdir(exist_ok=True, parents=True)
 
 
@@ -73,7 +76,6 @@ output_dir.mkdir(exist_ok=True, parents=True)
 tokenizer, model = get_tokenizer_model(model_type)
 model = model.to(device)
 config = get_model_config(model_type, model)
-seq_len = 1024
 config
 
 # %%
