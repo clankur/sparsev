@@ -11,6 +11,7 @@ import utils
 import importlib
 import os
 from pathlib import Path
+import argparse
 
 # %%
 importlib.reload(utils)
@@ -38,14 +39,31 @@ def get_model_config(
 
 
 # %%
-deep_dive_heads = False
-seed = 0
-batch_size = 1
-num_of_samples = 192
-dataset_type = DatasetTypes.SLIM_PAJAMA
-model_type = ModelTypes.GPT2
+def parse_args():
+    parser = argparse.ArgumentParser(description='Analysis script for attention patterns')
+    parser.add_argument('--seed', type=int, default=0,
+                      help='Random seed (default: 0)')
+    parser.add_argument('--batch-size', type=int, default=1,
+                      help='Batch size (default: 1)')
+    parser.add_argument('--num-samples', type=int, default=192,
+                      help='Number of samples to process (default: 192)')
+    parser.add_argument('--dataset', type=str, default='SLIM_PAJAMA',
+                      choices=[dt.name for dt in DatasetTypes],
+                      help='Dataset type (default: SLIM_PAJAMA)')
+    parser.add_argument('--model', type=str, default='LLAMA',
+                      choices=[mt.name for mt in ModelTypes],
+                      help='Model type (default: LLAMA)')
+    return parser.parse_args()
 
-output_dir = Path(f"output_plots/{dataset_type.value}/{model_type.value}")
+# Replace the existing variable assignments with:
+args = parse_args()
+seed = args.seed
+batch_size = args.batch_size
+num_of_samples = args.num_samples
+dataset_type = DatasetTypes[args.dataset]
+model_type = ModelTypes[args.model]
+
+output_dir = Path(f"outputs/{dataset_type.value}/{model_type.value}")
 output_dir.mkdir(exist_ok=True, parents=True)
 
 
@@ -180,6 +198,8 @@ layer_cumsum_metrics["worst"] = (
 )
 
 # %%
+
+# %%
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -221,6 +241,47 @@ def plot_cum_layer_prob(layer_metrics, metric_name):
     )
     plt.close()
 
+# %%
+import pandas as pd
+
+def analyze_layer_thresholds(layer_metrics, metric_name, save_to_file=True):
+    layer_metrics = layer_metrics[metric_name].cpu().numpy()
+    n_layers, k_len = layer_metrics.shape
+    confidence_levels = [0.90, 0.95, 0.99, 0.999]
+    
+    # Create DataFrame to store results
+    results = []
+    
+    for layer in range(n_layers):
+        layer_data = layer_metrics[layer, :]
+        thresholds = []
+        
+        for conf in confidence_levels:
+            # Find first position where cumsum exceeds confidence level
+            threshold = (layer_data >= conf).nonzero()[0][0].item()
+            thresholds.append(threshold)
+        
+        results.append({
+            'Layer': layer,
+            '90%': thresholds[0],
+            '95%': thresholds[1],
+            '99%': thresholds[2],
+            '99.9%': thresholds[3],
+            '90% %': f'{(thresholds[0]/k_len)*100:.2f}%',
+            '95% %': f'{(thresholds[1]/k_len)*100:.2f}%',
+            '99% %': f'{(thresholds[2]/k_len)*100:.2f}%',
+            '99.9% %': f'{(thresholds[3]/k_len)*100:.2f}%'
+        })
+    
+    # Convert to DataFrame and print
+    df = pd.DataFrame(results)
+    if save_to_file:
+        df.to_csv(output_dir / f"layer_thresholds_{metric_name}.csv", index=False)
+   
+    return df
+
+# %%
+analyze_layer_thresholds(layer_cumsum_metrics, "avg")
 
 # %%
 for k in layer_cumsum_metrics.keys():
