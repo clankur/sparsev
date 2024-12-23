@@ -17,15 +17,11 @@ importlib.reload(utils)
 global DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
 from utils import DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
 
-# Add after initial imports
+# %%
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "tpu" if torch.backends.xla else "cpu"
 )
 print(f"Using device: {device}")
-
-# Add output directory setup
-output_dir = Path("output_plots")
-output_dir.mkdir(exist_ok=True)
 
 
 # %%
@@ -45,15 +41,19 @@ def get_model_config(
 deep_dive_heads = False
 seed = 0
 batch_size = 1
-num_of_samples = 50
-dataset_type = DatasetTypes.CODE
-model_type = ModelTypes.LLAMA
+num_of_samples = 192
+dataset_type = DatasetTypes.SLIM_PAJAMA
+model_type = ModelTypes.GPT2
+
+output_dir = Path(f"output_plots/{dataset_type.value}/{model_type.value}")
+output_dir.mkdir(exist_ok=True, parents=True)
+
 
 # %%
 tokenizer, model = get_tokenizer_model(model_type)
 model = model.to(device)
 config = get_model_config(model_type, model)
-seq_len = 4096
+seq_len = 1024
 config
 
 # %%
@@ -62,22 +62,22 @@ stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
 # %%
 head_metrics = {
     "cum_prob": {
-        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)),
-        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)),
-        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)),
+        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
+        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
+        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
     },
     "att_wei": {
-        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)),
-        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)),
-        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)),
+        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
+        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
+        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
     },
 }
 layer_cumsum_metrics = {
-    "best": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)),
-    "avg": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)),
+    "best": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)).to(device),
+    "avg": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)).to(device),
     "worst": torch.full(
         (batch_size, config.n_layer, config.n_head * seq_len), torch.inf
-    ),
+    ).to(device),
 }
 
 # %%
@@ -225,7 +225,7 @@ def plot_cum_layer_prob(layer_metrics, metric_name):
 # %%
 for k in layer_cumsum_metrics.keys():
     print(f"{k} cum prob across layers")
-    plot_cum_layer_prob(layer_cumsum_metrics[k].numpy(), k)
+    plot_cum_layer_prob(layer_cumsum_metrics[k].cpu().numpy(), k)
 
 
 # %%
@@ -266,13 +266,13 @@ def plot_cum_prob_per_head(head_metrics, metric_name):
 
 
 # %%
-plot_cum_prob_per_head(head_metrics["cum_prob"]["avg"].numpy(), "avg")
+plot_cum_prob_per_head(head_metrics["cum_prob"]["avg"].cpu().numpy(), "avg")
 
 
 # %%
-avg_layer_cumprob_np = layer_cumsum_metrics["avg"].numpy()
-best_layer_cumprob_np = layer_cumsum_metrics["best"].numpy()
-worst_layer_cumprob_np = layer_cumsum_metrics["worst"].numpy()
+avg_layer_cumprob_np = layer_cumsum_metrics["avg"].cpu().numpy()
+best_layer_cumprob_np = layer_cumsum_metrics["best"].cpu().numpy()
+worst_layer_cumprob_np = layer_cumsum_metrics["worst"].cpu().numpy()
 total_k_len = config.n_head * seq_len
 probability_thresholds = [80, 90, 95, 99, 99.9]
 for threshold in probability_thresholds:
@@ -287,9 +287,9 @@ for threshold in probability_thresholds:
 # %%
 def plot_cum_prob_per_head_detailed(head_metrics):
     avg_metrics, best_metrics, worst_metrics = (
-        head_metrics["avg"].numpy(),
-        head_metrics["best"].numpy(),
-        head_metrics["worst"].numpy(),
+        head_metrics["avg"].cpu().numpy(),
+        head_metrics["best"].cpu().numpy(),
+        head_metrics["worst"].cpu().numpy(),
     )
     num_layers, num_heads, seq_length = avg_metrics.shape
 
@@ -462,7 +462,7 @@ for k in head_metrics["att_wei"].keys():
     avg_att_wei = reduce(att_wei, "layer head k_len -> layer head", "mean").unsqueeze(
         -1
     )
-    diff = (att_wei - avg_att_wei).numpy()
+    diff = (att_wei - avg_att_wei).cpu().numpy()
     print(f"{k} case distance from mean")
     plot_att_wei_heatmap(diff, f"{k}_diff")
 
