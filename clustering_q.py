@@ -84,21 +84,42 @@ q_0.shape, k_0.shape, logits_0.shape
 k_clusters = einsum(
     logits_0,
     k_0,
-    "B n_kv n_q_per_kv Qlen Klen, B Klen n_kv d_head -> B n_kv n_q_per_kv Qlen d_head",
+    "B n_kv n_q_per_kv Qlen Klen, B Klen n_kv d_head -> B n_kv n_q_per_kv d_head Qlen",
 )
 q_clusters = einsum(
     logits_0,
     q_0,
-    "B n_kv n_q_per_kv Qlen Klen, B Qlen n_kv n_q_per_kv d_head -> B n_kv n_q_per_kv Klen d_head",
+    "B n_kv n_q_per_kv Qlen Klen, B Qlen n_kv n_q_per_kv d_head -> B n_kv n_q_per_kv d_head Klen",
 )
+# %%
+# essentially we find for each head and for each batch, which k we should use, by getting the argmax of the q_clusters
+q_labels = torch.argmax(q_clusters, dim=-1, keepdim=True)
+k_labels = torch.argmax(k_clusters, dim=-1, keepdim=True)
+"""
 
-# how are we reducing HBM requirements?
-# K_clusters shape = B Qlen n_kv n_q_per_kv d_head
-# K shape = B Klen n_kv d_head
-#   K_clusters is << K if, Qlen << Klen and n_q_per_kv = 1?
-# we won't be pulling all the keys into memory, but instead we will use
-# K_clusters alignments with Q_clusters to get what specific keys are relevant (from the cluster)
+q_labels = torch.argmax(q_clusters, dim=-2, keepdim=True)
+tensor([[  0,   0,   0,   0,   0, 127, 127,   0, 127, 127, 127, 127,   0,   0,
+           0,   0, 127, 127, 127,   4,  83,   4,   4,   4,   4, 120,   0,   0,
+           0, 127,   0, 127,  24, 127,   0, 127, 127,   0,   0,   0, 127,   0,
+           0,   0,   0, 127,   0,   0,   0,   0,   0,   0,   0,   4,   4,   0,
+          24,   0,   0,   4,  83,   0, 127,   0]], device='cuda:0')
+this pretty much says for each feature in the head, which k_0 to use
 
+OR
+q_labels = torch.argmax(q_clusters, dim=-1)
+tensor([52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+         52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+         52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+         52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+         52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+         52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+         52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+         52, 52], device='cuda:0'),
+for each query this says what feature is the most important
+
+"""
+# %%
+q_clusters.shape, q_labels.shape
 # %%
 # causal mask?
 k_avg = reduce(k_0, "B Klen n_kv d_head -> B 1 n_kv d_head", "mean")
