@@ -56,13 +56,47 @@ class SeqLenFilterDataLoader(DataLoader):
 
 
 def get_tokenizer_model(
-    model_type: ModelTypes,
+    model_type: ModelTypes, get_intermediates: bool = False
 ) -> Tuple[AutoTokenizer, AutoModelForCausalLM]:
     """Get the tokenizer and model for a given model type."""
     model_name = model_type.value
-    return AutoTokenizer.from_pretrained(
-        model_name
-    ), AutoModelForCausalLM.from_pretrained(model_name, output_attentions=True)
+    model_name = model_type.value
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name, output_attentions=True, return_dict_in_generate=True
+    )
+
+    if not get_intermediates:
+        return tokenizer, model
+
+    # Dictionary to store Q/K/V projections for each layer
+    model.attention_intermediates = {}
+
+    # Create a mapping of modules to their full names
+    saved_projs = ["q_proj", "k_proj", "v_proj", "self_attn"]
+    module_to_name = {}
+    for name, module in model.named_modules():
+        if any(proj in name.lower() for proj in saved_projs):
+            module_to_name[module] = name
+
+    def attention_forward_hook(module, input, output):
+        full_name = module_to_name[module]
+        parts = full_name.split(".")
+        proj_type = parts[-1]  # e.g., 'q_proj'
+        layer_num = int(parts[2])  # e.g., '0' from 'model.layers.0.self_attn.q_proj'
+
+        if proj_type not in model.attention_intermediates:
+            model.attention_intermediates[proj_type] = []
+
+        model.attention_intermediates[proj_type].append(output)
+        return output
+
+    # Register hooks for all attention layers
+    for name, module in model.named_modules():
+        if any(proj in name.lower() for proj in saved_projs):
+            module.register_forward_hook(attention_forward_hook)
+
+    return tokenizer, model
 
 
 def get_dataset(
@@ -88,14 +122,11 @@ def get_dataset(
     )
 
     dataset = dataset.shuffle(seed=seed)
-    if dataset_type == DatasetTypes.CODE:
-        tokenized = dataset.select_columns(["content"]).map(
-            tokenize, input_columns=["content"], remove_columns=["content"]
-        )
-    else:
-        tokenized = dataset.select_columns(["text"]).map(
-            tokenize, input_columns=["text"], remove_columns=["text"]
-        )
+    column_name = "content" if dataset_type == DatasetTypes.CODE else "text"
+
+    tokenized = dataset.select_columns([column_name]).map(
+        tokenize, input_columns=[column_name], remove_columns=[column_name]
+    )
 
     dataloader = SeqLenFilterDataLoader(
         tokenized, seq_len, true_batch_size=batch_size, batch_size=256

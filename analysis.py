@@ -40,26 +40,60 @@ def get_model_config(
 
 # %%
 def parse_args():
-    parser = argparse.ArgumentParser(description='Analysis script for attention patterns')
-    parser.add_argument('--seed', type=int, default=0,
-                      help='Random seed (default: 0)')
-    parser.add_argument('--batch-size', type=int, default=1,
-                      help='Batch size (default: 1)')
-    parser.add_argument('--seq-len', type=int, default=1024,
-                      help='Sequence length (default: 1024)')
-    parser.add_argument('--num-samples', type=int, default=192,
-                      help='Number of samples to process (default: 192)')
-    parser.add_argument('--dataset', type=str, default='SLIM_PAJAMA',
-                      choices=[dt.name for dt in DatasetTypes],
-                      help='Dataset type (default: SLIM_PAJAMA)')
-    parser.add_argument('--model', type=str, default='LLAMA',
-                      choices=[mt.name for mt in ModelTypes],
-                      help='Model type (default: LLAMA)')
-    parser.add_argument('--deep-dive-heads', type=bool, default=False,
-                      help='Deep dive analysis of heads (default: False)')
+    parser = argparse.ArgumentParser(
+        description="Analysis script for attention patterns"
+    )
+    parser.add_argument("--seed", type=int, default=0, help="Random seed (default: 0)")
+    parser.add_argument(
+        "--batch-size", type=int, default=1, help="Batch size (default: 1)"
+    )
+    parser.add_argument(
+        "--seq-len", type=int, default=1024, help="Sequence length (default: 1024)"
+    )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=192,
+        help="Number of samples to process (default: 192)",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="SLIM_PAJAMA",
+        choices=[dt.name for dt in DatasetTypes],
+        help="Dataset type (default: SLIM_PAJAMA)",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="LLAMA",
+        choices=[mt.name for mt in ModelTypes],
+        help="Model type (default: LLAMA)",
+    )
+    parser.add_argument(
+        "--deep-dive-heads",
+        type=bool,
+        default=False,
+        help="Deep dive analysis of heads (default: False)",
+    )
     return parser.parse_args()
 
-args = parse_args()
+
+# %%
+import sys
+
+if __name__ == "__main__" and not any(["ipykernel" in arg for arg in sys.argv]):
+    args = parse_args()
+else:
+    args = SimpleNamespace(
+        seed=0,
+        batch_size=1,
+        num_samples=1,
+        dataset="SLIM_PAJAMA",
+        model="LLAMA",
+        deep_dive_heads=False,
+        seq_len=1024,
+    )
 seed = args.seed
 batch_size = args.batch_size
 num_of_samples = args.num_samples
@@ -84,19 +118,35 @@ stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
 # %%
 head_metrics = {
     "cum_prob": {
-        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
-        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
-        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
+        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(
+            device
+        ),
+        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(
+            device
+        ),
+        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)).to(
+            device
+        ),
     },
     "att_wei": {
-        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
-        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
-        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)).to(device),
+        "best": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(
+            device
+        ),
+        "avg": torch.zeros((batch_size, config.n_layer, config.n_head, seq_len)).to(
+            device
+        ),
+        "worst": torch.ones((batch_size, config.n_layer, config.n_head, seq_len)).to(
+            device
+        ),
     },
 }
 layer_cumsum_metrics = {
-    "best": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)).to(device),
-    "avg": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)).to(device),
+    "best": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)).to(
+        device
+    ),
+    "avg": torch.zeros((batch_size, config.n_layer, config.n_head * seq_len)).to(
+        device
+    ),
     "worst": torch.full(
         (batch_size, config.n_layer, config.n_head * seq_len), torch.inf
     ).to(device),
@@ -112,8 +162,9 @@ for i in range(num_of_samples):
 
     with torch.no_grad():
         outputs = model(**inputs_sliced)
-
+    print(f"{outputs.__dict__.keys()=}")
     attentions = torch.stack(outputs.attentions)
+    print(f"attentions.shape: {attentions.shape}")
     attentions = rearrange(
         attentions, "layer B head q_len k_len -> B layer head q_len k_len"
     )
@@ -245,45 +296,50 @@ def plot_cum_layer_prob(layer_metrics, metric_name):
     )
     plt.close()
 
+
 # %%
 import pandas as pd
+
 
 def analyze_layer_thresholds(layer_metrics, metric_name, save_to_file=True):
     layer_metrics = layer_metrics[metric_name].cpu().numpy()
     n_layers, k_len = layer_metrics.shape
     confidence_levels = [0.80, 0.90, 0.95, 0.99, 0.999]
-    
+
     # Create DataFrame to store results
     results = []
-    
+
     for layer in range(n_layers):
         layer_data = layer_metrics[layer, :]
         thresholds = []
-        
+
         for conf in confidence_levels:
             # Find first position where cumsum exceeds confidence level
             threshold = (layer_data >= conf).nonzero()[0][0].item()
             thresholds.append(threshold)
-        
-        results.append({
-            'Layer': layer,
-            '80%': thresholds[0],
-            '90%': thresholds[1],
-            '95%': thresholds[2],
-            '99%': thresholds[3],
-            '99.9%': thresholds[4],
-            '80% %': f'{(thresholds[0]/k_len)*100:.2f}%',
-            '95% %': f'{(thresholds[1]/k_len)*100:.2f}%',
-            '99% %': f'{(thresholds[2]/k_len)*100:.2f}%',
-            '99.9% %': f'{(thresholds[3]/k_len)*100:.2f}%',
-        })
-    
+
+        results.append(
+            {
+                "Layer": layer,
+                "80%": thresholds[0],
+                "90%": thresholds[1],
+                "95%": thresholds[2],
+                "99%": thresholds[3],
+                "99.9%": thresholds[4],
+                "80% %": f"{(thresholds[0]/k_len)*100:.2f}%",
+                "95% %": f"{(thresholds[1]/k_len)*100:.2f}%",
+                "99% %": f"{(thresholds[2]/k_len)*100:.2f}%",
+                "99.9% %": f"{(thresholds[3]/k_len)*100:.2f}%",
+            }
+        )
+
     # Convert to DataFrame and print
     df = pd.DataFrame(results)
     if save_to_file:
         df.to_csv(output_dir / f"layer_thresholds_{metric_name}.csv", index=False)
-   
+
     return df
+
 
 # %%
 analyze_layer_thresholds(layer_cumsum_metrics, "avg")
@@ -340,6 +396,7 @@ avg_layer_cumprob_np = layer_cumsum_metrics["avg"].cpu().numpy()
 best_layer_cumprob_np = layer_cumsum_metrics["best"].cpu().numpy()
 worst_layer_cumprob_np = layer_cumsum_metrics["worst"].cpu().numpy()
 total_k_len = config.n_head * seq_len
+
 
 # %%
 def plot_cum_prob_per_head_detailed(head_metrics):
