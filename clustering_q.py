@@ -66,7 +66,7 @@ activations[1]["q_proj"].shape, activations[1]["k_proj"].shape, activations[1][
     "v_proj"
 ].shape, activations[1]["att_wei"].shape
 # %%
-layer_idx = 3
+layer_idx = 5
 
 n_q_per_kv = model.config.num_attention_heads // model.config.num_key_value_heads
 q_0 = rearrange(
@@ -103,7 +103,7 @@ k_0_0, k_0_0.shape, q_0_0.shape, logits_0_0.shape
 k_0_clusters = einsum(
     logits_0_0,
     k_0_0,
-    "n_samples Qlen Klen, n_samples Klen d_head -> n_samples Qlen d_head",
+    "B Qlen Klen, B Klen d_head -> B Qlen d_head",
 )
 
 
@@ -113,23 +113,23 @@ def kmeans(data, n_clusters, max_iters=50, tolerance=1e-4, seed=42):
     Performs K-Means clustering using scikit-learn.
 
     Args:
-        data (torch.Tensor): Input tensor of shape (n_samples, Qlen, d_head)
+        data (torch.Tensor): Input tensor of shape (B, Qlen, d_head)
         n_clusters (int): Number of clusters
     Returns:
-        centroids (torch.Tensor): shape (n_samples, n_clusters, d_head)
-        cluster_assignments (torch.Tensor): shape (n_samples, Qlen)
+        centroids (torch.Tensor): shape (B, n_clusters, d_head)
+        cluster_assignments (torch.Tensor): For each item in data, it gives what cluster it is in. shape (B, Qlen)
     """
-    n_samples, Qlen, d_head = data.shape
+    B, Qlen, d_head = data.shape
     device = data.device
 
     data_cpu = data.cpu().numpy()
 
     # Initialize outputs
-    centroids = torch.zeros(n_samples, n_clusters, d_head, device=device)
-    cluster_assignments = torch.zeros(n_samples, Qlen, dtype=torch.long, device=device)
+    centroids = torch.zeros(B, n_clusters, d_head, device=device)
+    cluster_assignments = torch.zeros(B, Qlen, dtype=torch.long, device=device)
 
     # Perform kmeans for each sample
-    for i in range(n_samples):
+    for i in range(B):
         kmeans = KMeans(
             n_clusters=n_clusters, max_iter=max_iters, tol=tolerance, random_state=seed
         )
@@ -150,23 +150,73 @@ for i in range(n_clusters):
 # %%
 cluster_assignments.shape, k_0_clusters.shape, centroids.shape, cluster_assignments
 # %%
-# need to apply rope
 aligned = einsum(
     q_0_0,
     centroids,
-    "n_samples Qlen d_head, n_samples n_clusters d_head -> n_samples Qlen n_clusters",
+    "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
 )
 # for each query, getting the cluster that aligns the most
 argmax_cluster = torch.argmax(aligned, dim=2)
-# argmax_cluster = reduce(
-#     aligned, "n_samples Qlen n_clusters -> n_samples n_clusters", "max"
-# )
-argmax_cluster.shape, argmax_cluster
+# argmax_cluster = reduce(aligned, "n_samples Qlen n_clusters -> n_samples n_clusters", "max")
+argmax_cluster.shape, "argmax_cluster", argmax_cluster
 # %%
-cumsum_attwei, sorted_indices = logits_0_0.sort(dim=-1, descending=True)
-cumsum_attwei = torch.cumsum(cumsum_attwei, dim=-1)
-cumsum_attwei, cumsum_attwei.shape
+argmax_cluster.shape, cluster_assignments.shape, k_0_0.shape,
 # %%
-sorted_indices
+# lookup the tokens in k_0_0 based on the cluster_assignments and argmax_cluster
+# (torch.Size([5, 256]), torch.Size([5, 256]), torch.Size([5, 256, 64]))
+# argmax_cluster, cluster_assignments, k_0_0
+
+# %%
+# Shape annotations:
+# argmax_cluster: [B, Qlen] - for each query position, which cluster it best aligns with
+# cluster_assignments: [B, Qlen] - for each query position, which cluster its weighted key combination belongs to
+# k_0_0: [B, Klen, d_head] - the key vectors
+
+# Since both argmax_cluster and cluster_assignments are [B, Qlen],
+# we can directly compare them
+matches = argmax_cluster == cluster_assignments  # [B, Qlen]
+matched_vectors = k_0_clusters[matches]
+matched_vectors.shape, matched_vectors
+matches_per_batch = matches.sum(dim=1)  # [B]
+
+matched_vectors_split = torch.split(matched_vectors, matches_per_batch.tolist())
+for i in range(len(matched_vectors_split)):
+    print(
+        f"fetched {matched_vectors_split[i].shape[0]} out of {seq_len} keys ({matched_vectors_split[i].shape[0]/seq_len*100:.2f}%)"
+    )
+# %%
+# %%
+# Shape annotations:
+# logits_0_0: [B, Qlen, Klen] - attention weights
+B, Qlen, Klen = logits_0_0.shape
+# Sort attention weights and get cumulative sum
+sorted_weights, sorted_indices = logits_0_0.sort(
+    dim=-1, descending=True
+)  # Sort each query's attention weights
+cumsum_weights = torch.cumsum(
+    sorted_weights, dim=-1
+)  # Cumulative sum of sorted weights
+top_weight_mask = cumsum_weights <= 0.8  # [B, Qlen, Klen]
+top_weight_mask[..., 0] = True
+sorted_weights, sorted_indices
+
+# %%
+relevant_keys = [[] for _ in range(B)]
+print(len(relevant_keys), len(relevant_keys[0]))
+for i in range(B):
+    for j in range(Qlen):
+        key_indices = sorted_indices[i, j, :][top_weight_mask[i, j, :]]
+        if len(key_indices) > 0:
+            relevant_keys[i].append(key_indices)
+        else:
+            relevant_keys[i].append([])
+for i in range(B):
+    print(len(relevant_keys[i]))
+# %%
+# for each batch, for each query this has the indices of the keys that are relevant to get att_wei > 0.8
+relevant_keys  # B x Qlen x variable n_relevant_keys
+
+# %%
+matches.nonzero()
 
 # %%
