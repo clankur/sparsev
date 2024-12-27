@@ -99,8 +99,8 @@ logits_0_0 = logits_0[:, head_idx, q_idx, :, :]  # B x Qlen x Klen
 k_0_0, k_0_0.shape, q_0_0.shape, logits_0_0.shape
 
 # %%
-# TODO: maybe want to compare using non-roped q and k
-k_0_clusters = einsum(
+# this is the average weighted key for each query
+avg_wei_k = einsum(
     logits_0_0,
     k_0_0,
     "B Qlen Klen, B Klen d_head -> B Qlen d_head",
@@ -143,21 +143,21 @@ def kmeans(data, n_clusters, max_iters=50, tolerance=1e-4, seed=42):
 
 # %%
 n_clusters = 10
-centroids, cluster_assignments = kmeans(k_0_clusters, n_clusters)
+centroids, cluster_assignments = kmeans(avg_wei_k, n_clusters)
 for i in range(n_clusters):
     print(centroids[:, i, :].shape)
 
 # %%
-cluster_assignments.shape, k_0_clusters.shape, centroids.shape, cluster_assignments
+cluster_assignments.shape, avg_wei_k.shape, centroids.shape, cluster_assignments
 # %%
-aligned = einsum(
+cluster_alignment = einsum(
     q_0_0,
     centroids,
     "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
 )
 # for each query, getting the cluster that aligns the most
-argmax_cluster = torch.argmax(aligned, dim=2)
-# argmax_cluster = reduce(aligned, "n_samples Qlen n_clusters -> n_samples n_clusters", "max")
+argmax_cluster = torch.argmax(cluster_alignment, dim=2)
+# argmax_cluster = reduce(aligned, "n_samples Qlen n_clusters -> n_samples Qlen", "max")
 argmax_cluster.shape, "argmax_cluster", argmax_cluster
 # %%
 argmax_cluster.shape, cluster_assignments.shape, k_0_0.shape,
@@ -175,14 +175,22 @@ argmax_cluster.shape, cluster_assignments.shape, k_0_0.shape,
 # Since both argmax_cluster and cluster_assignments are [B, Qlen],
 # we can directly compare them
 matches = argmax_cluster == cluster_assignments  # [B, Qlen]
-matched_vectors = k_0_clusters[matches]
+matched_vectors = avg_wei_k[matches]
 matched_vectors.shape, matched_vectors
 matches_per_batch = matches.sum(dim=1)  # [B]
+# for each batch, we have the indices of the average weighted keys that are relevant to the query
+matching_indices = matches.nonzero()
+indices_per_batch = [
+    matching_indices[matching_indices[:, 0] == b][:, 1]
+    for b in range(batch_size * n_samples)
+]
 
-matched_vectors_split = torch.split(matched_vectors, matches_per_batch.tolist())
-for i in range(len(matched_vectors_split)):
+k_approx = torch.split(matched_vectors, matches_per_batch.tolist())
+matching_indices
+# %%
+for i in range(len(k_approx)):
     print(
-        f"fetched {matched_vectors_split[i].shape[0]} out of {seq_len} keys ({matched_vectors_split[i].shape[0]/seq_len*100:.2f}%)"
+        f"fetched {k_approx[i].shape[0]} out of {seq_len} keys ({k_approx[i].shape[0]/seq_len*100:.2f}%)"
     )
 # %%
 # %%
@@ -198,7 +206,6 @@ cumsum_weights = torch.cumsum(
 )  # Cumulative sum of sorted weights
 top_weight_mask = cumsum_weights <= 0.8  # [B, Qlen, Klen]
 top_weight_mask[..., 0] = True
-sorted_weights, sorted_indices
 
 # %%
 relevant_keys = [[] for _ in range(B)]
@@ -206,17 +213,11 @@ print(len(relevant_keys), len(relevant_keys[0]))
 for i in range(B):
     for j in range(Qlen):
         key_indices = sorted_indices[i, j, :][top_weight_mask[i, j, :]]
-        if len(key_indices) > 0:
-            relevant_keys[i].append(key_indices)
-        else:
-            relevant_keys[i].append([])
+        relevant_keys[i].append(key_indices)
 for i in range(B):
     print(len(relevant_keys[i]))
 # %%
 # for each batch, for each query this has the indices of the keys that are relevant to get att_wei > 0.8
 relevant_keys  # B x Qlen x variable n_relevant_keys
-
-# %%
-matches.nonzero()
 
 # %%
