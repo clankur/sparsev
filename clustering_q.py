@@ -33,7 +33,7 @@ model = model.to(device)
 model.config
 # %%
 n_samples = 2
-seq_len = 128
+seq_len = 1024
 batch_size = 1
 # %%
 stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
@@ -108,8 +108,80 @@ k_approx.shape
 # what we can do is use k_clusters/q_clusters to ground some centroids
 # and use k means to adjust them over each example
 # should we use k_approx or a
+# %%
+# simplify and work with 1 head
+k_0_0 = k_0[0, :, 0, :]  #  Klen x d_head
+q_0_0 = q_0[0, :, 0, 0, :]  # Qlen x d_head
+logits_0_0 = logits_0[0, 0, 0, :, :]  # Qlen x Klen
+k_0_0, k_0_0.shape, q_0_0.shape, logits_0_0.shape
+
+# TODO: maybe want to compare using non-roped q and k
+k_0_clusters = einsum(
+    logits_0_0,
+    k_0_0,
+    "Qlen Klen, Klen d_head -> Qlen d_head",
+)
+
 
 # %%
+def kmeans(data, n_clusters, max_iters=50, tolerance=1e-4, seed=42):
+    torch.manual_seed(seed)
+    indices = torch.randperm(data.shape[0])[:n_clusters]
+    centroids = data[indices]
+
+    prev_assignments = None
+    for iter_num in range(max_iters):
+        distances = torch.cdist(data, centroids)
+        cluster_assignments = torch.argmin(distances, dim=1)
+
+        if prev_assignments is not None and torch.all(
+            cluster_assignments == prev_assignments
+        ):
+            print(f"Converged after {iter_num} iterations")
+            break
+
+        new_centroids = torch.stack(
+            [
+                (
+                    data[cluster_assignments == i].mean(dim=0)
+                    if (cluster_assignments == i).any()
+                    else centroids[i]
+                )
+                for i in range(n_clusters)
+            ]
+        )
+
+        if torch.norm(new_centroids - centroids, p=2) < tolerance:
+            print(f"Converged after {iter_num} iterations (tolerance reached)")
+            break
+        centroids = new_centroids
+        prev_assignments = cluster_assignments
+    return centroids, cluster_assignments
+
+
+# %%
+n_clusters = 10
+centroids, cluster_assignments = kmeans(k_0_clusters, n_clusters)
+
+# %%
+cluster_assignments.shape, k_0_clusters.shape, centroids.shape, cluster_assignments
+# %%
+# need to apply rope
+aligned = einsum(
+    q_0_0,
+    centroids,
+    "Qlen d_head, n_clusters d_head -> Qlen n_clusters",
+)
+argmax_cluster = torch.argmax(aligned, dim=-1)
+argmax_cluster.shape, argmax_cluster, aligned
+# %%
+centroids[5], k_0_clusters[cluster_assignments == 5].shape
+# %%
+
+# %%
+# TODO: apply rope to the ks we retrieve from the clusters
+# need k_retrieved
+
 cluster_alignment = einsum(
     q_0,
     k_approx,
