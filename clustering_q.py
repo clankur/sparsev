@@ -90,57 +90,15 @@ logits_0 = rearrange(
 q_0.shape, k_0.shape, logits_0.shape
 
 # %%
-# k_clusters = einsum(
-#     logits_0,
-#     k_0,
-#     "n_samples B n_kv n_q_per_kv Qlen Klen, n_samples B Klen n_kv d_head -> n_samples B n_kv n_q_per_kv d_head Qlen",
-# )
-# %%
-# essentially we find for each head and for each batch, which k we should use, by getting the argmax of the q_clusters
-# k_labels = torch.argmax(k_clusters, dim=-1)
-# %%
-# _, B, n_kv, n_q_per_kv, d_head, Klen = k_clusters.shape
-# sample_indices = (
-#     torch.arange(n_samples)
-#     .view(n_samples, 1, 1, 1, 1)
-#     .expand(n_samples, B, n_kv, n_q_per_kv, d_head)
-# )
-# batch_indices = (
-#     torch.arange(B).view(B, 1, 1, 1).expand(n_samples, B, n_kv, n_q_per_kv, d_head)
-# )
-# kv_indices = (
-#     torch.arange(n_kv)
-#     .view(1, n_kv, 1, 1)
-#     .expand(n_samples, B, n_kv, n_q_per_kv, d_head)
-# )
-# q_indices = (
-#     torch.arange(n_q_per_kv)
-#     .view(1, 1, n_q_per_kv, 1)
-#     .expand(n_samples, B, n_kv, n_q_per_kv, d_head)
-# )
-# head_indices = (
-#     torch.arange(d_head)
-#     .view(1, 1, 1, d_head)
-#     .expand(n_samples, B, n_kv, n_q_per_kv, d_head)
-# )
-# k_approx = k_clusters[
-#     sample_indices, batch_indices, kv_indices, q_indices, head_indices, k_labels
-# ]
-# we have the most important k and q for each head
-# k_approx.shape
-# %%
-# what we can do is use k_clusters/q_clusters to ground some centroids
-# and use k means to adjust them over each example
-# should we use k_approx or a
-# %%
 # simplify and work with 1 head
 head_idx = 0
 q_idx = 0
-k_0_0 = k_0[:, 0, :, head_idx, :]  #  Klen x d_head
-q_0_0 = q_0[:, 0, :, head_idx, q_idx, :]  # Qlen x d_head
-logits_0_0 = logits_0[:, 0, head_idx, q_idx, :, :]  # Qlen x Klen
+k_0_0 = k_0[:, :, head_idx, :]  #  B x Klen x d_head
+q_0_0 = q_0[:, :, head_idx, q_idx, :]  # B x Qlen x d_head
+logits_0_0 = logits_0[:, head_idx, q_idx, :, :]  # B x Qlen x Klen
 k_0_0, k_0_0.shape, q_0_0.shape, logits_0_0.shape
 
+# %%
 # TODO: maybe want to compare using non-roped q and k
 k_0_clusters = einsum(
     logits_0_0,
@@ -200,7 +158,10 @@ aligned = einsum(
 )
 # for each query, getting the cluster that aligns the most
 argmax_cluster = torch.argmax(aligned, dim=2)
-print(argmax_cluster.shape, argmax_cluster, aligned)
+# argmax_cluster = reduce(
+#     aligned, "n_samples Qlen n_clusters -> n_samples n_clusters", "max"
+# )
+argmax_cluster.shape, argmax_cluster
 # %%
 cumsum_attwei, sorted_indices = logits_0_0.sort(dim=-1, descending=True)
 cumsum_attwei = torch.cumsum(cumsum_attwei, dim=-1)
