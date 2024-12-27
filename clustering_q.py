@@ -167,6 +167,8 @@ argmax_cluster.shape, cluster_assignments.shape, k_0_0.shape,
 # argmax_cluster, cluster_assignments, k_0_0
 
 # %%
+B, Qlen, Klen = logits_0_0.shape
+# %%
 # Shape annotations:
 # argmax_cluster: [B, Qlen] - for each query position, which cluster it best aligns with
 # cluster_assignments: [B, Qlen] - for each query position, which cluster its weighted key combination belongs to
@@ -174,29 +176,20 @@ argmax_cluster.shape, cluster_assignments.shape, k_0_0.shape,
 
 # Since both argmax_cluster and cluster_assignments are [B, Qlen],
 # we can directly compare them
-matches = argmax_cluster == cluster_assignments  # [B, Qlen]
-matched_vectors = avg_wei_k[matches]
-matched_vectors.shape, matched_vectors
-matches_per_batch = matches.sum(dim=1)  # [B]
-# for each batch, we have the indices of the average weighted keys that are relevant to the query
-matching_indices = matches.nonzero()
-indices_per_batch = [
-    matching_indices[matching_indices[:, 0] == b][:, 1]
-    for b in range(batch_size * n_samples)
-]
-
-k_approx = torch.split(matched_vectors, matches_per_batch.tolist())
-matching_indices
-# %%
-for i in range(len(k_approx)):
-    print(
-        f"fetched {k_approx[i].shape[0]} out of {seq_len} keys ({k_approx[i].shape[0]/seq_len*100:.2f}%)"
-    )
+B, Qlen = argmax_cluster.shape
+cluster_relevant_indices = [[] for _ in range(B)]
+for b in range(B):
+    for q in range(Qlen):
+        # Get the predicted cluster for this query
+        pred_cluster = argmax_cluster[b, q]
+        # Find all key positions that belong to this cluster
+        key_indices = torch.where(cluster_assignments[b] == pred_cluster)[0]
+        cluster_relevant_indices[b].append(key_indices)
+cluster_relevant_indices
 # %%
 # %%
 # Shape annotations:
 # logits_0_0: [B, Qlen, Klen] - attention weights
-B, Qlen, Klen = logits_0_0.shape
 # Sort attention weights and get cumulative sum
 sorted_weights, sorted_indices = logits_0_0.sort(
     dim=-1, descending=True
@@ -219,5 +212,41 @@ for i in range(B):
 # %%
 # for each batch, for each query this has the indices of the keys that are relevant to get att_wei > 0.8
 relevant_keys  # B x Qlen x variable n_relevant_keys
+
+# %%
+# compute the recall and precision of the clustering vs the top_weight_mask
+
+B, Qlen = argmax_cluster.shape
+precision_scores = torch.zeros(B, Qlen)
+recall_scores = torch.zeros(B, Qlen)
+
+for b in range(B):
+    for q in range(Qlen):
+        # Convert relevant keys to set for efficient comparison
+        true_relevant = set(relevant_keys[b][q].tolist())
+        pred_relevant = set(cluster_relevant_indices[b][q].tolist())
+
+        # Handle edge case where predictions or true relevant sets are empty
+        if len(pred_relevant) == 0 or len(true_relevant) == 0:
+            continue
+
+        # Compute intersection
+        correct_predictions = len(true_relevant.intersection(pred_relevant))
+
+        # Compute precision and recall
+        precision = correct_predictions / len(pred_relevant)
+        recall = correct_predictions / len(true_relevant)
+
+        precision_scores[b, q] = precision
+        recall_scores[b, q] = recall
+
+# Compute average metrics
+avg_precision = precision_scores.mean().item()
+avg_recall = recall_scores.mean().item()
+f1_score = 2 * (avg_precision * avg_recall) / (avg_precision + avg_recall)
+
+print(f"Average Precision: {avg_precision:.3f}")
+print(f"Average Recall: {avg_recall:.3f}")
+print(f"F1 Score: {f1_score:.3f}")
 
 # %%
