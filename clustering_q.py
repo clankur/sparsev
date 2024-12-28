@@ -32,9 +32,10 @@ tokenizer, model = get_tokenizer_model(model_type, get_intermediates=True)
 model = model.to(device)
 model.config
 # %%
-n_samples = 1024
-seq_len = 1024
+n_samples = 30
+seq_len = 256
 batch_size = 1
+
 n_clusters = 50
 clustering_with = "q"  # ["q", "avg_wei_k"]
 # %%
@@ -180,19 +181,20 @@ for layer_idx in range(*layer_range):
             elif clustering_with == "q":
                 centroids, cluster_assignments = kmeans(q_0_0, n_clusters=n_clusters)
                 cluster_alignment = einsum(
-                    centroids,
                     k_0_0,
-                    "B n_clusters d_head, B Klen d_head -> B n_clusters Klen",
+                    centroids,
+                    "B Klen d_head, B n_clusters d_head -> B Klen n_clusters",
                 )
+                q_cluster_alignment = einsum(
+                    q_0_0,
+                    centroids,
+                    "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
+                )
+
             else:
                 raise ValueError(f"Invalid clustering_with: {clustering_with}")
 
             # Calculate cluster alignment
-            cluster_alignment = einsum(
-                q_0_0,
-                centroids,
-                "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
-            )
             argmax_cluster = torch.argmax(cluster_alignment, dim=2)
 
             # Get dimensions
@@ -262,11 +264,12 @@ for layer_idx in range(*layer_range):
             results["total_prob"][layer_idx, head_idx, q_idx, :] = total_probs.mean(
                 dim=0
             )
-            print(
-                f"   Average Prob across all queries: {total_probs.mean().item():.3f}"
-            )
-            print(f"   Min Prob across all queries: {total_probs.min().item():.3f}")
-            print(f"   Max Prob across all queries: {total_probs.max().item():.3f}")
+            print(f"  Average Prob across all queries: {total_probs.mean().item():.3f}")
+            print(f"  Min Prob across all queries: {total_probs.min().item():.3f}")
+            print(f"  Max Prob across all queries: {total_probs.max().item():.3f}")
+
+            # TODO: capture the size of cluster assignments vs the size of the relevant keys
+            # see how much more are we capturing
 # %%
 # After the main loop, calculate overall metrics
 selected_precision = results["precision"][
