@@ -32,8 +32,8 @@ tokenizer, model = get_tokenizer_model(model_type, get_intermediates=True)
 model = model.to(device)
 model.config
 # %%
-n_samples = 30
-seq_len = 512
+n_samples = 1024
+seq_len = 1024
 batch_size = 1
 # %%
 stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
@@ -112,9 +112,21 @@ results = {
     "precision": torch.zeros(n_layers, n_kv_heads, n_q_per_kv),
     "recall": torch.zeros(n_layers, n_kv_heads, n_q_per_kv),
     "f1": torch.zeros(n_layers, n_kv_heads, n_q_per_kv),
+    "total_prob": torch.zeros(n_layers, n_kv_heads, n_q_per_kv, seq_len),
 }
 # %%
-for layer_idx in range(n_layers):
+# Specify ranges using tuples - (start, end). Use None to analyze all
+layer_range = None
+head_range = None
+query_range = None
+
+# Convert None to full ranges
+layer_range = layer_range or (0, n_layers)
+head_range = head_range or (0, n_kv_heads)
+query_range = query_range or (0, n_q_per_kv)
+
+# Modify the main loop to use these ranges
+for layer_idx in range(*layer_range):
     # Rearrange activations for this layer
     q_0 = rearrange(
         torch.stack(
@@ -141,8 +153,8 @@ for layer_idx in range(n_layers):
         n_kv=n_kv_heads,
     )[layer_idx]
 
-    for head_idx in range(n_kv_heads):
-        for q_idx in range(n_q_per_kv):
+    for head_idx in range(*head_range):
+        for q_idx in range(*query_range):
             # Extract specific head and query data
             k_0_0 = k_0[:, :, head_idx, :]  # B x Klen x d_head
             q_0_0 = q_0[:, :, head_idx, q_idx, :]  # B x Qlen x d_head
@@ -172,11 +184,15 @@ for layer_idx in range(n_layers):
 
             # Calculate cluster relevant indices
             cluster_relevant_indices = [[] for _ in range(B)]
+            prob_from_cluster = torch.zeros(B, Qlen)
+            total_probs = torch.zeros(B, Qlen)
             for b in range(B):
                 for q in range(Qlen):
                     pred_cluster = argmax_cluster[b, q]
                     key_indices = torch.where(cluster_assignments[b] == pred_cluster)[0]
                     cluster_relevant_indices[b].append(key_indices)
+                    total_prob = logits_0_0[b, q, key_indices].sum().item()
+                    total_probs[b, q] = total_prob
 
             # Calculate attention-based relevant keys
             sorted_weights, sorted_indices = logits_0_0.sort(dim=-1, descending=True)
@@ -221,30 +237,54 @@ for layer_idx in range(n_layers):
             results["recall"][layer_idx, head_idx, q_idx] = avg_recall
             results["f1"][layer_idx, head_idx, q_idx] = f1_score
 
-            print(f"Layer {layer_idx}, Head {head_idx}, Query {q_idx}:")
+            print(f"Layer {layer_idx}, KV Head {head_idx}, Query Idx {q_idx}:")
             print(f"  Precision: {avg_precision:.3f}")
             print(f"  Recall: {avg_recall:.3f}")
             print(f"  F1: {f1_score:.3f}")
 
+            # Store the average total_prob for this layer, head, and query
+            results["total_prob"][layer_idx, head_idx, q_idx, :] = total_probs.mean(
+                dim=0
+            )
+            print(
+                f"   Average Prob across all queries: {total_probs.mean().item():.3f}"
+            )
+            print(f"   Min Prob across all queries: {total_probs.min().item():.3f}")
+            print(f"   Max Prob across all queries: {total_probs.max().item():.3f}")
 # %%
 # After the main loop, calculate overall metrics
-overall_precision = results["precision"].mean().item()
-overall_recall = results["recall"].mean().item()
-overall_f1 = results["f1"].mean().item()
+selected_precision = results["precision"][
+    slice(*layer_range), slice(*head_range), slice(*query_range)
+]
+selected_recall = results["recall"][
+    slice(*layer_range), slice(*head_range), slice(*query_range)
+]
+selected_f1 = results["f1"][
+    slice(*layer_range), slice(*head_range), slice(*query_range)
+]
 
-print("\nOverall Metrics:")
-print(f"Average Precision across all layers/heads: {overall_precision:.3f}")
-print(f"Average Recall across all layers/heads: {overall_recall:.3f}")
-print(f"Average F1 Score across all layers/heads: {overall_f1:.3f}")
+print("\nMetrics for Selected Range:")
+print(f"Average Precision: {selected_precision.mean().item():.3f}")
+print(f"Average Recall: {selected_recall.mean().item():.3f}")
+print(f"Average F1 Score: {selected_f1.mean().item():.3f}")
 
-# Optional: You can also look at per-layer averages
-per_layer_precision = results["precision"].mean(dim=(1, 2))  # Average across heads
-per_layer_recall = results["recall"].mean(dim=(1, 2))
-per_layer_f1 = results["f1"].mean(dim=(1, 2))
+# Only show per-layer averages if analyzing multiple layers
+if layer_range[1] - layer_range[0] > 1:
+    print("\nPer-layer averages:")
+    for layer_idx in range(*layer_range):
+        layer_precision = results["precision"][
+            layer_idx, slice(*head_range), slice(*query_range)
+        ].mean()
+        layer_recall = results["recall"][
+            layer_idx, slice(*head_range), slice(*query_range)
+        ].mean()
+        layer_f1 = results["f1"][
+            layer_idx, slice(*head_range), slice(*query_range)
+        ].mean()
 
-print("\nPer-layer averages:")
-for layer_idx in range(n_layers):
-    print(f"Layer {layer_idx}:")
-    print(f"  Precision: {per_layer_precision[layer_idx]:.3f}")
-    print(f"  Recall: {per_layer_recall[layer_idx]:.3f}")
-    print(f"  F1: {per_layer_f1[layer_idx]:.3f}")
+        print(f"Layer {layer_idx}:")
+        print(f"  Precision: {layer_precision:.3f}")
+        print(f"  Recall: {layer_recall:.3f}")
+        print(f"  F1: {layer_f1:.3f}")
+
+# %%
