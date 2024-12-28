@@ -32,8 +32,8 @@ tokenizer, model = get_tokenizer_model(model_type, get_intermediates=True)
 model = model.to(device)
 model.config
 # %%
-n_samples = 5
-seq_len = 256
+n_samples = 30
+seq_len = 512
 batch_size = 1
 # %%
 stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
@@ -65,46 +65,6 @@ for i in range(n_samples):
 activations[1]["q_proj"].shape, activations[1]["k_proj"].shape, activations[1][
     "v_proj"
 ].shape, activations[1]["att_wei"].shape
-# %%
-layer_idx = 5
-
-n_q_per_kv = model.config.num_attention_heads // model.config.num_key_value_heads
-q_0 = rearrange(
-    torch.stack([layer_intermediates["q_proj"] for layer_intermediates in activations]),
-    "n_samples L B Qlen (n_kv n_q_per_kv d_head) ->  L ( n_samples B )  Qlen n_kv n_q_per_kv d_head",
-    n_kv=model.config.num_key_value_heads,
-    n_q_per_kv=n_q_per_kv,
-)[layer_idx]
-k_0 = rearrange(
-    torch.stack([layer_intermediates["k_proj"] for layer_intermediates in activations]),
-    "n_samples L B Klen (n_kv d_head) -> L ( n_samples B ) Klen n_kv d_head",
-    n_kv=model.config.num_key_value_heads,
-)[layer_idx]
-logits_0 = rearrange(
-    torch.stack(
-        [layer_intermediates["att_wei"] for layer_intermediates in activations]
-    ),
-    "n_samples L B (n_kv n_q) Qlen Klen -> L ( n_samples B ) n_kv n_q Qlen Klen",
-    n_kv=model.config.num_key_value_heads,
-)[layer_idx]
-q_0.shape, k_0.shape, logits_0.shape
-
-# %%
-# simplify and work with 1 head
-head_idx = 0
-q_idx = 0
-k_0_0 = k_0[:, :, head_idx, :]  #  B x Klen x d_head
-q_0_0 = q_0[:, :, head_idx, q_idx, :]  # B x Qlen x d_head
-logits_0_0 = logits_0[:, head_idx, q_idx, :, :]  # B x Qlen x Klen
-k_0_0, k_0_0.shape, q_0_0.shape, logits_0_0.shape
-
-# %%
-# this is the average weighted key for each query
-avg_wei_k = einsum(
-    logits_0_0,
-    k_0_0,
-    "B Qlen Klen, B Klen d_head -> B Qlen d_head",
-)
 
 
 # %%
@@ -142,111 +102,149 @@ def kmeans(data, n_clusters, max_iters=50, tolerance=1e-4, seed=42):
 
 
 # %%
-n_clusters = 10
-centroids, cluster_assignments = kmeans(avg_wei_k, n_clusters)
-for i in range(n_clusters):
-    print(centroids[:, i, :].shape)
+# Setup dimensions
+n_layers = len(activations[0]["q_proj"])
+n_kv_heads = model.config.num_key_value_heads
+n_q_per_kv = model.config.num_attention_heads // model.config.num_key_value_heads
+
+# Initialize results storage
+results = {
+    "precision": torch.zeros(n_layers, n_kv_heads, n_q_per_kv),
+    "recall": torch.zeros(n_layers, n_kv_heads, n_q_per_kv),
+    "f1": torch.zeros(n_layers, n_kv_heads, n_q_per_kv),
+}
+# %%
+for layer_idx in range(n_layers):
+    # Rearrange activations for this layer
+    q_0 = rearrange(
+        torch.stack(
+            [layer_intermediates["q_proj"] for layer_intermediates in activations]
+        ),
+        "n_samples L B Qlen (n_kv n_q_per_kv d_head) ->  L ( n_samples B )  Qlen n_kv n_q_per_kv d_head",
+        n_kv=n_kv_heads,
+        n_q_per_kv=n_q_per_kv,
+    )[layer_idx]
+
+    k_0 = rearrange(
+        torch.stack(
+            [layer_intermediates["k_proj"] for layer_intermediates in activations]
+        ),
+        "n_samples L B Klen (n_kv d_head) -> L ( n_samples B ) Klen n_kv d_head",
+        n_kv=n_kv_heads,
+    )[layer_idx]
+
+    logits_0 = rearrange(
+        torch.stack(
+            [layer_intermediates["att_wei"] for layer_intermediates in activations]
+        ),
+        "n_samples L B (n_kv n_q) Qlen Klen -> L ( n_samples B ) n_kv n_q Qlen Klen",
+        n_kv=n_kv_heads,
+    )[layer_idx]
+
+    for head_idx in range(n_kv_heads):
+        for q_idx in range(n_q_per_kv):
+            # Extract specific head and query data
+            k_0_0 = k_0[:, :, head_idx, :]  # B x Klen x d_head
+            q_0_0 = q_0[:, :, head_idx, q_idx, :]  # B x Qlen x d_head
+            logits_0_0 = logits_0[:, head_idx, q_idx, :, :]  # B x Qlen x Klen
+
+            # Calculate average weighted key for each query
+            avg_wei_k = einsum(
+                logits_0_0,
+                k_0_0,
+                "B Qlen Klen, B Klen d_head -> B Qlen d_head",
+            )
+
+            # Calculate kmeans
+            n_clusters = 10
+            centroids, cluster_assignments = kmeans(avg_wei_k, n_clusters)
+
+            # Calculate cluster alignment
+            cluster_alignment = einsum(
+                q_0_0,
+                centroids,
+                "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
+            )
+            argmax_cluster = torch.argmax(cluster_alignment, dim=2)
+
+            # Get dimensions
+            B, Qlen = argmax_cluster.shape
+
+            # Calculate cluster relevant indices
+            cluster_relevant_indices = [[] for _ in range(B)]
+            for b in range(B):
+                for q in range(Qlen):
+                    pred_cluster = argmax_cluster[b, q]
+                    key_indices = torch.where(cluster_assignments[b] == pred_cluster)[0]
+                    cluster_relevant_indices[b].append(key_indices)
+
+            # Calculate attention-based relevant keys
+            sorted_weights, sorted_indices = logits_0_0.sort(dim=-1, descending=True)
+            cumsum_weights = torch.cumsum(sorted_weights, dim=-1)
+            top_weight_mask = cumsum_weights <= 0.8
+            top_weight_mask[..., 0] = True
+
+            relevant_keys = [[] for _ in range(B)]
+            for b in range(B):
+                for q in range(Qlen):
+                    key_indices = sorted_indices[b, q, :][top_weight_mask[b, q, :]]
+                    relevant_keys[b].append(key_indices)
+
+            # Calculate precision and recall
+            precision_scores = torch.zeros(B, Qlen)
+            recall_scores = torch.zeros(B, Qlen)
+            for b in range(B):
+                for q in range(Qlen):
+                    true_relevant = set(relevant_keys[b][q].tolist())
+                    pred_relevant = set(cluster_relevant_indices[b][q].tolist())
+
+                    if len(pred_relevant) == 0 or len(true_relevant) == 0:
+                        continue
+
+                    correct_predictions = len(true_relevant.intersection(pred_relevant))
+                    precision = correct_predictions / len(pred_relevant)
+                    recall = correct_predictions / len(true_relevant)
+
+                    precision_scores[b, q] = precision
+                    recall_scores[b, q] = recall
+
+            # Store average metrics for this layer, head, and query
+            avg_precision = precision_scores.mean().item()
+            avg_recall = recall_scores.mean().item()
+            f1_score = (
+                2 * (avg_precision * avg_recall) / (avg_precision + avg_recall)
+                if (avg_precision + avg_recall) > 0
+                else 0
+            )
+
+            results["precision"][layer_idx, head_idx, q_idx] = avg_precision
+            results["recall"][layer_idx, head_idx, q_idx] = avg_recall
+            results["f1"][layer_idx, head_idx, q_idx] = f1_score
+
+            print(f"Layer {layer_idx}, Head {head_idx}, Query {q_idx}:")
+            print(f"  Precision: {avg_precision:.3f}")
+            print(f"  Recall: {avg_recall:.3f}")
+            print(f"  F1: {f1_score:.3f}")
 
 # %%
-cluster_assignments.shape, avg_wei_k.shape, centroids.shape, cluster_assignments
-# %%
-cluster_alignment = einsum(
-    q_0_0,
-    centroids,
-    "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
-)
-# for each query, getting the cluster that aligns the most
-argmax_cluster = torch.argmax(cluster_alignment, dim=2)
-# argmax_cluster = reduce(aligned, "n_samples Qlen n_clusters -> n_samples Qlen", "max")
-argmax_cluster.shape, "argmax_cluster", argmax_cluster
-# %%
-argmax_cluster.shape, cluster_assignments.shape, k_0_0.shape,
-# %%
-# lookup the tokens in k_0_0 based on the cluster_assignments and argmax_cluster
-# (torch.Size([5, 256]), torch.Size([5, 256]), torch.Size([5, 256, 64]))
-# argmax_cluster, cluster_assignments, k_0_0
+# After the main loop, calculate overall metrics
+overall_precision = results["precision"].mean().item()
+overall_recall = results["recall"].mean().item()
+overall_f1 = results["f1"].mean().item()
 
-# %%
-B, Qlen, Klen = logits_0_0.shape
-# %%
-# Shape annotations:
-# argmax_cluster: [B, Qlen] - for each query position, which cluster it best aligns with
-# cluster_assignments: [B, Qlen] - for each query position, which cluster its weighted key combination belongs to
-# k_0_0: [B, Klen, d_head] - the key vectors
+print("\nOverall Metrics:")
+print(f"Average Precision across all layers/heads: {overall_precision:.3f}")
+print(f"Average Recall across all layers/heads: {overall_recall:.3f}")
+print(f"Average F1 Score across all layers/heads: {overall_f1:.3f}")
 
-# Since both argmax_cluster and cluster_assignments are [B, Qlen],
-# we can directly compare them
-B, Qlen = argmax_cluster.shape
-cluster_relevant_indices = [[] for _ in range(B)]
-for b in range(B):
-    for q in range(Qlen):
-        # Get the predicted cluster for this query
-        pred_cluster = argmax_cluster[b, q]
-        # Find all key positions that belong to this cluster
-        key_indices = torch.where(cluster_assignments[b] == pred_cluster)[0]
-        cluster_relevant_indices[b].append(key_indices)
-cluster_relevant_indices
-# %%
-# %%
-# Shape annotations:
-# logits_0_0: [B, Qlen, Klen] - attention weights
-# Sort attention weights and get cumulative sum
-sorted_weights, sorted_indices = logits_0_0.sort(
-    dim=-1, descending=True
-)  # Sort each query's attention weights
-cumsum_weights = torch.cumsum(
-    sorted_weights, dim=-1
-)  # Cumulative sum of sorted weights
-top_weight_mask = cumsum_weights <= 0.8  # [B, Qlen, Klen]
-top_weight_mask[..., 0] = True
+# Optional: You can also look at per-layer averages
+per_layer_precision = results["precision"].mean(dim=(1, 2))  # Average across heads
+per_layer_recall = results["recall"].mean(dim=(1, 2))
+per_layer_f1 = results["f1"].mean(dim=(1, 2))
 
-# %%
-relevant_keys = [[] for _ in range(B)]
-print(len(relevant_keys), len(relevant_keys[0]))
-for i in range(B):
-    for j in range(Qlen):
-        key_indices = sorted_indices[i, j, :][top_weight_mask[i, j, :]]
-        relevant_keys[i].append(key_indices)
-for i in range(B):
-    print(len(relevant_keys[i]))
-# %%
-# for each batch, for each query this has the indices of the keys that are relevant to get att_wei > 0.8
-relevant_keys  # B x Qlen x variable n_relevant_keys
-
-# %%
-# compute the recall and precision of the clustering vs the top_weight_mask
-
-B, Qlen = argmax_cluster.shape
-precision_scores = torch.zeros(B, Qlen)
-recall_scores = torch.zeros(B, Qlen)
-
-for b in range(B):
-    for q in range(Qlen):
-        # Convert relevant keys to set for efficient comparison
-        true_relevant = set(relevant_keys[b][q].tolist())
-        pred_relevant = set(cluster_relevant_indices[b][q].tolist())
-
-        # Handle edge case where predictions or true relevant sets are empty
-        if len(pred_relevant) == 0 or len(true_relevant) == 0:
-            continue
-
-        # Compute intersection
-        correct_predictions = len(true_relevant.intersection(pred_relevant))
-
-        # Compute precision and recall
-        precision = correct_predictions / len(pred_relevant)
-        recall = correct_predictions / len(true_relevant)
-
-        precision_scores[b, q] = precision
-        recall_scores[b, q] = recall
-
-# Compute average metrics
-avg_precision = precision_scores.mean().item()
-avg_recall = recall_scores.mean().item()
-f1_score = 2 * (avg_precision * avg_recall) / (avg_precision + avg_recall)
-
-print(f"Average Precision: {avg_precision:.3f}")
-print(f"Average Recall: {avg_recall:.3f}")
-print(f"F1 Score: {f1_score:.3f}")
-
-# %%
+print("\nPer-layer averages:")
+for layer_idx in range(n_layers):
+    print(f"Layer {layer_idx}:")
+    print(f"  Precision: {per_layer_precision[layer_idx]:.3f}")
+    print(f"  Recall: {per_layer_recall[layer_idx]:.3f}")
+    print(f"  F1: {per_layer_f1[layer_idx]:.3f}")
