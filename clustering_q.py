@@ -48,9 +48,9 @@ for i in range(n_samples):
 
     with torch.no_grad():
         outputs = model(**inputs_sliced)
+        cpu_attentions = [att.cpu() for att in outputs.attentions]
 
-    attentions = torch.stack(outputs.attentions)
-    activations[i]["att_wei"] = attentions.cpu()
+    activations[i]["att_wei"] = cpu_attentions
     activations[i]["q_proj"] = torch.stack(
         model.attention_intermediates["q_proj"]
     ).cpu()
@@ -168,7 +168,7 @@ for layer_idx in range(*layer_range):
             )
 
             # Calculate kmeans
-            n_clusters = 10
+            n_clusters = 50
             centroids, cluster_assignments = kmeans(avg_wei_k, n_clusters)
 
             # Calculate cluster alignment

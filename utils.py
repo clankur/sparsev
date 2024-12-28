@@ -5,6 +5,8 @@ from enum import Enum
 from typing import Tuple, Dict, Any
 import functools
 from torch.utils.data import DataLoader
+import numpy as np
+from einops import rearrange, einops
 
 
 class DatasetTypes(Enum):
@@ -149,3 +151,82 @@ def ensure_figs_folder():
 
     if not os.path.exists("figs"):
         os.makedirs("figs")
+
+
+from sklearn.base import BaseEstimator, ClusterMixin
+
+
+class AlignmentKMeans(BaseEstimator, ClusterMixin):
+    def __init__(self, n_clusters=3, max_iter=100, tol=1e-4, random_state=None):
+        self.n_clusters = n_clusters
+        self.max_iter = max_iter
+        self.tol = tol
+        self.random_state = random_state
+
+    def fit(self, Q, K):
+        """
+        Fits the KMeans model to align the centroids of Q to the centroids of K
+
+        Q: (Qlen, d_head)
+        K: (Klen, d_head)
+
+        """
+        np.random.seed(self.random_state)
+        Qlen, d_head = Q.shape
+        Q: np.ndarray = Q.numpy() if isinstance(Q, torch.Tensor) else Q
+        K = K.numpy() if isinstance(K, torch.Tensor) else K
+        self.cluster_centers_ = Q[
+            np.random.choice(Qlen, self.n_clusters, replace=False)
+        ]
+
+        for i in range(self.max_iter):
+            # Compute cosine similarity with K
+            alignments = einops.einsum(
+                K,
+                self.cluster_centers_,
+                "Klen d_head, Klen n_clusters d_head -> Klen n_clusters",
+            )
+            # alignments /= np.linalg.norm(K, axis=1, keepdims=True) * np.linalg.norm(
+            #     self.cluster_centers_, axis=1
+            # )
+
+            # calculate the distance from each Q to centroids
+            Q = rearrange(Q, "Qlen d_head -> Qlen 1 d_head")
+            distances = np.linalg.norm(Q - self.cluster_centers_, axis=2)
+            self.alignment_labels_ = np.argmax(alignments, axis=1)
+            self.labels_ = np.argmin(distances, axis=1)
+
+            new_centroids = np.array(
+                [
+                    Q[self.labels_ == cluster].mean(axis=0)
+                    for cluster in range(self.n_clusters)
+                ]
+            )
+            new_centroids /= np.linalg.norm(new_centroids, axis=1, keepdims=True)
+
+            # Check for convergence
+            if np.allclose(self.cluster_centers_, new_centroids, atol=self.tol):
+                break
+            self.cluster_centers_ = new_centroids
+
+        self.n_iter_ = i + 1
+        return self
+
+    def predict(self, Q, K):
+        Q = Q.numpy() if isinstance(Q, torch.Tensor) else Q
+        K = K.numpy() if isinstance(K, torch.Tensor) else K
+        alignments = einops.einsum(
+            K,
+            self.cluster_centers_,
+            "Klen d_head, Klen n_clusters d_head -> Klen n_clusters",
+        )
+        alignments /= np.linalg.norm(K, axis=1, keepdims=True) * np.linalg.norm(
+            self.cluster_centers_, axis=1
+        )
+        Q = rearrange(Q, "Qlen d_head -> Qlen 1 d_head")
+        distances = np.linalg.norm(Q - self.cluster_centers_, axis=2)
+        return np.argmin(distances, axis=1), np.argmax(alignments, axis=1)
+
+    def fit_predict(self, X, y=None):
+        self.fit(X)
+        return self.labels_
