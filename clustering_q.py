@@ -15,19 +15,15 @@ import argparse
 from sklearn.cluster import KMeans
 
 # %%
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "tpu" if torch.backends.xla else "cpu"
+)
 print(f"Using device: {device}")
 
 # %%
 importlib.reload(utils)
 global DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
-from utils import (
-    DatasetTypes,
-    ModelTypes,
-    get_dataset,
-    get_tokenizer_model,
-    AlignmentKMeans,
-)
+from utils import DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
 
 # %%
 model_type = ModelTypes.LLAMA
@@ -36,10 +32,9 @@ tokenizer, model = get_tokenizer_model(model_type, get_intermediates=True)
 model = model.to(device)
 model.config
 # %%
-n_samples = 30
-seq_len = 256
+n_samples = 1024
+seq_len = 1024
 batch_size = 1
-
 n_clusters = 50
 clustering_with = "q"  # ["q", "avg_wei_k"]
 # %%
@@ -75,7 +70,7 @@ activations[1]["q_proj"].shape, activations[1]["k_proj"].shape, activations[1][
 
 
 # %%
-def kmeans(k, q=None, n_clusters=10, max_iters=50, tolerance=1e-4, seed=42):
+def kmeans(data, n_clusters, max_iters=50, tolerance=1e-4, seed=42):
     """
     Performs K-Means clustering using scikit-learn.
 
@@ -86,40 +81,23 @@ def kmeans(k, q=None, n_clusters=10, max_iters=50, tolerance=1e-4, seed=42):
         centroids (torch.Tensor): shape (B, n_clusters, d_head)
         cluster_assignments (torch.Tensor): For each item in data, it gives what cluster it is in. shape (B, Qlen)
     """
-    B, Qlen, d_head = k.shape
-    device = k.device
+    B, Qlen, d_head = data.shape
+    device = data.device
 
-    k_cpu = k.cpu().numpy()
-    if q is not None:
-        q_cpu = q.cpu().numpy()
+    data_cpu = data.cpu().numpy()
 
     # Initialize outputs
     centroids = torch.zeros(B, n_clusters, d_head, device=device)
-    if q is not None:
-        cluster_assignments = torch.zeros(B, Qlen, dtype=torch.long, device=device)
+    cluster_assignments = torch.zeros(B, Qlen, dtype=torch.long, device=device)
 
     # Perform kmeans for each sample
     for i in range(B):
-        if q is not None:
-            kmeans = AlignmentKMeans(
-                n_clusters=n_clusters,
-                max_iter=max_iters,
-                tol=tolerance,
-                random_state=seed,
-            )
-            cluster_assignments[i] = torch.from_numpy(
-                kmeans.fit_predict(q_cpu[i], k_cpu[i])
-            ).to(device)
-        else:
-            kmeans = KMeans(
-                n_clusters=n_clusters,
-                max_iter=max_iters,
-                tol=tolerance,
-                random_state=seed,
-            )
-            cluster_assignments[i] = torch.from_numpy(kmeans.fit_predict(k_cpu[i])).to(
-                device
-            )
+        kmeans = KMeans(
+            n_clusters=n_clusters, max_iter=max_iters, tol=tolerance, random_state=seed
+        )
+        cluster_assignments[i] = torch.from_numpy(kmeans.fit_predict(data_cpu[i])).to(
+            device
+        )
         centroids[i] = torch.from_numpy(kmeans.cluster_centers_).to(device)
 
     return centroids, cluster_assignments
@@ -184,8 +162,8 @@ for layer_idx in range(*layer_range):
             q_0_0 = q_0[:, :, head_idx, q_idx, :]  # B x Qlen x d_head
             logits_0_0 = logits_0[:, head_idx, q_idx, :, :]  # B x Qlen x Klen
 
-            # Calculate average weighted key for each query
             if clustering_with == "avg_wei_k":
+                # Calculate average weighted key for each query
                 avg_wei_k = einsum(
                     logits_0_0,
                     k_0_0,
@@ -199,11 +177,8 @@ for layer_idx in range(*layer_range):
                     centroids,
                     "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
                 )
-
             elif clustering_with == "q":
-                centroids, cluster_assignments = kmeans(
-                    k_0_0, q=q_0_0, n_clusters=n_clusters
-                )
+                centroids, cluster_assignments = kmeans(q_0_0, n_clusters=n_clusters)
                 cluster_alignment = einsum(
                     centroids,
                     k_0_0,
@@ -213,6 +188,11 @@ for layer_idx in range(*layer_range):
                 raise ValueError(f"Invalid clustering_with: {clustering_with}")
 
             # Calculate cluster alignment
+            cluster_alignment = einsum(
+                q_0_0,
+                centroids,
+                "B Qlen d_head, B n_clusters d_head -> B Qlen n_clusters",
+            )
             argmax_cluster = torch.argmax(cluster_alignment, dim=2)
 
             # Get dimensions

@@ -184,17 +184,15 @@ class AlignmentKMeans(BaseEstimator, ClusterMixin):
             alignments = einops.einsum(
                 K,
                 self.cluster_centers_,
-                "Klen d_head, n_clusters d_head -> Klen n_clusters",
+                "Klen d_head, Klen n_clusters d_head -> Klen n_clusters",
             )
             # alignments /= np.linalg.norm(K, axis=1, keepdims=True) * np.linalg.norm(
             #     self.cluster_centers_, axis=1
             # )
 
             # calculate the distance from each Q to centroids
-            distances = np.linalg.norm(
-                rearrange(Q, "Qlen d_head -> Qlen 1 d_head") - self.cluster_centers_,
-                axis=-1,
-            )
+            Q = rearrange(Q, "Qlen d_head -> Qlen 1 d_head")
+            distances = np.linalg.norm(Q - self.cluster_centers_, axis=2)
             self.alignment_labels_ = np.argmax(alignments, axis=1)
             self.labels_ = np.argmin(distances, axis=1)
 
@@ -204,10 +202,6 @@ class AlignmentKMeans(BaseEstimator, ClusterMixin):
                     for cluster in range(self.n_clusters)
                 ]
             )
-
-            assert (
-                new_centroids.shape == self.cluster_centers_.shape
-            ), f"{new_centroids.shape} != {self.cluster_centers_.shape}"
             new_centroids /= np.linalg.norm(new_centroids, axis=1, keepdims=True)
 
             # Check for convergence
@@ -224,7 +218,7 @@ class AlignmentKMeans(BaseEstimator, ClusterMixin):
         alignments = einops.einsum(
             K,
             self.cluster_centers_,
-            "Klen d_head, n_clusters d_head -> Klen n_clusters",
+            "Klen d_head, Klen n_clusters d_head -> Klen n_clusters",
         )
         alignments /= np.linalg.norm(K, axis=1, keepdims=True) * np.linalg.norm(
             self.cluster_centers_, axis=1
@@ -233,6 +227,6 @@ class AlignmentKMeans(BaseEstimator, ClusterMixin):
         distances = np.linalg.norm(Q - self.cluster_centers_, axis=2)
         return np.argmin(distances, axis=1), np.argmax(alignments, axis=1)
 
-    def fit_predict(self, Q, K):
-        self.fit(Q, K)
-        return self.labels_, self.alignment_labels_
+    def fit_predict(self, X, y=None):
+        self.fit(X)
+        return self.labels_
