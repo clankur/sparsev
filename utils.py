@@ -58,14 +58,18 @@ class SeqLenFilterDataLoader(DataLoader):
 
 
 def get_tokenizer_model(
-    model_type: ModelTypes, get_intermediates: bool = False
+    model_type: ModelTypes,
+    get_intermediates: bool = False,
+    get_output_attentions: bool = True,
 ) -> Tuple[AutoTokenizer, AutoModelForCausalLM]:
     """Get the tokenizer and model for a given model type."""
     model_name = model_type.value
     model_name = model_type.value
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, output_attentions=True, return_dict_in_generate=True
+        model_name,
+        output_attentions=get_output_attentions,
+        return_dict_in_generate=True,
     )
 
     if not get_intermediates:

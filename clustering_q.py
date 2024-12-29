@@ -14,7 +14,6 @@ from pathlib import Path
 import argparse
 from sklearn.cluster import KMeans
 
-# %%
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "tpu" if torch.backends.xla else "cpu"
 )
@@ -26,18 +25,24 @@ global DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
 from utils import DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
 
 # %%
+# configurable parameters
+n_samples = 100
+seq_len = 1024
+batch_size = 1
+n_clusters = 50
+clustering_with = "q"  # ["q", "independent_q_k", "avg_wei_k"]
+
+# %%
 model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
-tokenizer, model = get_tokenizer_model(model_type, get_intermediates=True)
+get_output_attentions = True
+tokenizer, model = get_tokenizer_model(
+    model_type,
+    get_intermediates=True,
+    get_output_attentions=get_output_attentions,
+)
 model = model.to(device)
 model.config
-# %%
-n_samples = 30
-seq_len = 256
-batch_size = 1
-
-n_clusters = 50
-clustering_with = "q"  # ["q", "avg_wei_k"]
 # %%
 stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
 # %%
@@ -51,9 +56,11 @@ for i in range(n_samples):
 
     with torch.no_grad():
         outputs = model(**inputs_sliced)
-        cpu_attentions = [att.cpu() for att in outputs.attentions]
+        if get_output_attentions:
+            cpu_attentions = [att.cpu() for att in outputs.attentions]
 
-    activations[i]["att_wei"] = torch.stack(cpu_attentions).cpu()
+    if get_output_attentions:
+        activations[i]["att_wei"] = torch.stack(cpu_attentions).cpu()
     activations[i]["q_proj"] = torch.stack(
         model.attention_intermediates["q_proj"]
     ).cpu()
@@ -67,7 +74,10 @@ for i in range(n_samples):
 # %%
 activations[1]["q_proj"].shape, activations[1]["k_proj"].shape, activations[1][
     "v_proj"
-].shape, activations[1]["att_wei"].shape
+].shape
+# %%
+if get_output_attentions:
+    activations[1]["att_wei"].shape
 
 
 # %%
