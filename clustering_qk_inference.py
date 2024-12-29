@@ -38,7 +38,7 @@ from modeling_llama import LlamaForCausalLM
 model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
 n_samples = 1
-seq_len = 512
+seq_len = 10
 batch_size = 1
 
 # %%
@@ -66,6 +66,7 @@ def attention_forward_hook(module, input, output):
     layer_num = parts[1]  # e.g., '0' from 'layers.0.self_attn.q_proj'
     if proj_type not in model.attention_intermediates:
         model.attention_intermediates[proj_type] = []
+    print(proj_type, output.shape)
     model.attention_intermediates[proj_type].append(output)
     return output
 
@@ -82,10 +83,8 @@ for i in range(n_samples):
     inputs = next(stream)
     inputs_sliced = {"input_ids": torch.stack(inputs).to(device)}
 
-    with torch.no_grad():
-        outputs = model(**inputs_sliced)
+    model.generate(inputs_sliced["input_ids"], max_new_tokens=512)
+
 
 # %%
 model.attention_intermediates.keys()
-
-# %%
