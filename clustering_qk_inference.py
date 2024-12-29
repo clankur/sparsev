@@ -13,7 +13,8 @@ import os
 from pathlib import Path
 import argparse
 from sklearn.cluster import KMeans
-from modeling_llama import LlamaModel
+import modeling_llama
+
 
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "tpu" if torch.backends.xla else "cpu"
@@ -23,6 +24,7 @@ print(f"Using device: {device}")
 
 # %%
 importlib.reload(utils)
+importlib.reload(modeling_llama)
 global DatasetTypes, ModelTypes, get_dataset, get_tokenizer_model
 from utils import (
     DatasetTypes,
@@ -31,6 +33,7 @@ from utils import (
     get_tokenizer_model,
     get_model_state_dict,
 )
+from modeling_llama import LlamaModel
 
 # %%
 model_type = ModelTypes.LLAMA
@@ -85,5 +88,8 @@ for i in range(n_samples):
 
     with torch.no_grad():
         outputs = model(**inputs_sliced)
+
+# %%
+model.attention_intermediates.keys()
 
 # %%
