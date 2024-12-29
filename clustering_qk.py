@@ -57,20 +57,18 @@ for i in range(n_samples):
     with torch.no_grad():
         outputs = model(**inputs_sliced)
         if get_output_attentions:
-            cpu_attentions = [att.cpu() for att in outputs.attentions]
+            if type(outputs.attentions[0]) == tuple:
+                cpu_attentions = [att[0].cpu() for att in outputs.attentions]
+            else:
+                cpu_attentions = [att.cpu() for att in outputs.attentions]
 
     if get_output_attentions:
-        activations[i]["att_wei"] = torch.stack(cpu_attentions).cpu()
-    activations[i]["q_proj"] = torch.stack(
-        model.attention_intermediates["q_proj"]
-    ).cpu()
-    activations[i]["k_proj"] = torch.stack(
-        model.attention_intermediates["k_proj"]
-    ).cpu()
-    activations[i]["v_proj"] = torch.stack(
-        model.attention_intermediates["v_proj"]
-    ).cpu()
+        activations[i]["att_wei"] = torch.stack(cpu_attentions)
+    activations[i]["q_proj"] = torch.stack(model.attention_intermediates["q_proj"])
+    activations[i]["k_proj"] = torch.stack(model.attention_intermediates["k_proj"])
+    activations[i]["v_proj"] = torch.stack(model.attention_intermediates["v_proj"])
     model.attention_intermediates = {}
+    print(f"Activations for sample {i} collected")
 # %%
 activations[1]["q_proj"].shape, activations[1]["k_proj"].shape, activations[1][
     "v_proj"
