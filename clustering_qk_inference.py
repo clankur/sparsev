@@ -38,8 +38,8 @@ from modeling_llama import LlamaForCausalLM
 model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
 n_samples = 1
-seq_len = 10
-batch_size = 1
+seq_len = 256
+batch_size = 2
 
 # %%
 model_name = model_type.value
@@ -66,8 +66,11 @@ def attention_forward_hook(module, input, output):
     layer_num = parts[1]  # e.g., '0' from 'layers.0.self_attn.q_proj'
     if proj_type not in model.attention_intermediates:
         model.attention_intermediates[proj_type] = []
-    print(proj_type, output.shape)
-    model.attention_intermediates[proj_type].append(output)
+    # if length of sequence is 256, 512, 768, 1024... and roped_k_proj
+    # then compute logits and save
+    # softmax(roped_q @ roped_k.T)
+    if proj_type in saved_projs and output.shape[2] % 256 == 0:
+        model.attention_intermediates[proj_type].append(output.cpu())
     return output
 
 
@@ -83,8 +86,14 @@ for i in range(n_samples):
     inputs = next(stream)
     inputs_sliced = {"input_ids": torch.stack(inputs).to(device)}
 
-    model.generate(inputs_sliced["input_ids"], max_new_tokens=512)
+    model.generate(inputs_sliced["input_ids"], max_new_tokens=1024)
 
 
 # %%
 model.attention_intermediates.keys()
+
+# %%
+model.attention_intermediates["roped_k_proj"][0].shape, model.attention_intermediates[
+    "roped_q_proj"
+][0].shape
+# %%
