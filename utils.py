@@ -234,12 +234,3 @@ class AlignmentKMeans(BaseEstimator, ClusterMixin):
     def fit_predict(self, X, y=None):
         self.fit(X)
         return self.labels_
-
-
-def get_model_state_dict(model: PreTrainedModel):
-    new_state_dict = {}
-    for key, value in model.state_dict().items():
-        if key.startswith("model."):
-            new_key = key[6:]  # Remove 'model.' prefix
-            new_state_dict[new_key] = value
-    return new_state_dict

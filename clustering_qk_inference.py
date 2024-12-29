@@ -31,9 +31,8 @@ from utils import (
     ModelTypes,
     get_dataset,
     get_tokenizer_model,
-    get_model_state_dict,
 )
-from modeling_llama import LlamaModel
+from modeling_llama import LlamaForCausalLM
 
 # %%
 model_type = ModelTypes.LLAMA
@@ -45,9 +44,7 @@ batch_size = 1
 # %%
 model_name = model_type.value
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-state_dict = get_model_state_dict(AutoModelForCausalLM.from_pretrained(model_name))
-model = LlamaModel.from_pretrained(model_name)
-model.load_state_dict(state_dict)
+model = LlamaForCausalLM.from_pretrained(model_name)
 model = model.to(device)
 # %%
 stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
@@ -69,7 +66,6 @@ def attention_forward_hook(module, input, output):
     layer_num = parts[1]  # e.g., '0' from 'layers.0.self_attn.q_proj'
     if proj_type not in model.attention_intermediates:
         model.attention_intermediates[proj_type] = []
-
     model.attention_intermediates[proj_type].append(output)
     return output
 
