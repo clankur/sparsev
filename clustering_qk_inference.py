@@ -15,6 +15,11 @@ import argparse
 from sklearn.cluster import KMeans
 from modeling_llama import LlamaModel
 
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "tpu" if torch.backends.xla else "cpu"
+)
+print(f"Using device: {device}")
+
 
 # %%
 importlib.reload(utils)
@@ -30,8 +35,8 @@ from utils import (
 # %%
 model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
-n_samples = 100
-seq_len = 1024
+n_samples = 1
+seq_len = 512
 batch_size = 1
 
 # %%
@@ -40,6 +45,7 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 state_dict = get_model_state_dict(AutoModelForCausalLM.from_pretrained(model_name))
 model = LlamaModel.from_pretrained(model_name)
 model.load_state_dict(state_dict)
+model = model.to(device)
 # %%
 stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
 # %%
@@ -57,8 +63,7 @@ def attention_forward_hook(module, input, output):
     full_name = module_to_name[module]
     parts = full_name.split(".")
     proj_type = parts[-1]  # e.g., 'q_proj'
-    layer_num = int(parts[2])  # e.g., '0' from 'model.layers.0.self_attn.q_proj'
-
+    layer_num = parts[1]  # e.g., '0' from 'layers.0.self_attn.q_proj'
     if proj_type not in model.attention_intermediates:
         model.attention_intermediates[proj_type] = []
 
@@ -80,18 +85,5 @@ for i in range(n_samples):
 
     with torch.no_grad():
         outputs = model(**inputs_sliced)
-        if get_output_attentions:
-            cpu_attentions = [att.cpu() for att in outputs.attentions]
 
-    if get_output_attentions:
-        activations[i]["att_wei"] = torch.stack(cpu_attentions).cpu()
-    activations[i]["q_proj"] = torch.stack(
-        model.attention_intermediates["q_proj"]
-    ).cpu()
-    activations[i]["k_proj"] = torch.stack(
-        model.attention_intermediates["k_proj"]
-    ).cpu()
-    activations[i]["v_proj"] = torch.stack(
-        model.attention_intermediates["v_proj"]
-    ).cpu()
-    model.attention_intermediates = {}
+# %%
