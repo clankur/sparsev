@@ -1,10 +1,13 @@
 # %%
+import math
 import torch
 from einops import einsum, rearrange
 from sklearn.cluster import KMeans
 import utils
 import importlib
 from modeling_llama import LlamaForCausalLM
+import torch.nn.functional as F
+import numpy as np
 
 # %%
 importlib.reload(utils)
@@ -25,23 +28,19 @@ d_head = model.config.head_dim
 
 q = load_layer_projection(layer_idx, "q_proj")
 k = load_layer_projection(layer_idx, "k_proj")
-q.shape, k.shape
-# %%
 q = rearrange(
     q,
-    "seq_len B Qlen (n_heads d_head) -> B (seq_len Qlen ) n_heads d_head",
+    "seq_len B Qlen (n_heads d_head) -> B n_heads (seq_len Qlen) d_head",
     n_heads=n_kv_heads * n_q_per_kv,
     d_head=d_head,
-).transpose(1, 2)
-# B n_heads Qlen d_head
+)
 
 k = rearrange(
     k,
-    "seq_len B Klen (n_kv d_head) -> B (seq_len Klen) n_kv d_head",
+    "seq_len B Klen (n_kv d_head) -> B n_kv (seq_len Klen)  d_head",
     n_kv=n_kv_heads,
     d_head=d_head,
-).transpose(1, 2)
-# B n_kv Klen d_head
+)
 
 q = rearrange(
     q,
@@ -50,7 +49,14 @@ q = rearrange(
     n_q_per_kv=n_q_per_kv,
 )
 
-q.shape, k.shape
+
+logits = einsum(
+    q,
+    k,
+    "B n_kv n_q_per_kv Qlen d_head, B n_kv Klen d_head -> B n_kv n_q_per_kv Qlen Klen",
+) / math.sqrt(d_head)
+
+att_wei = F.softmax(logits, dim=-1)
 
 
 # %%
@@ -65,35 +71,34 @@ def kmeans(
         activation_type (str): "q_proj" or "k_proj"
         n_clusters (int): Number of clusters
     Returns:
-        centroids (torch.Tensor): shape (B, n_kv, n_q_per_kv, n_clusters, d_head) or (B, n_kv, n_clusters, d_head)
-        cluster_assignments (torch.Tensor): For each item in data, it gives what cluster it is in. shape (B, n_kv, n_q_per_kv, L) or (B, n_kv, L)
+        centroids, cluster_assignments: Tensors with appropriate shapes based on activation_type
     """
+    device = activation.device
+    shape = activation.shape
+    data_cpu = activation.cpu().numpy()
+
     if activation_type == "q_proj":
-        B, n_kv, n_q_per_kv, L, d_head = activation.shape
+        B, n_kv, n_q_per_kv, L, d_head = shape
+        dims_to_iterate = (B, n_kv, n_q_per_kv)
         centroids = torch.zeros(B, n_kv, n_q_per_kv, n_clusters, d_head, device=device)
         cluster_assignments = torch.zeros(
             B, n_kv, n_q_per_kv, L, dtype=torch.long, device=device
         )
-
-    elif activation_type == "k_proj":
-        B, n_kv, L, d_head = activation.shape
+    else:  # k_proj
+        B, n_kv, L, d_head = shape
+        dims_to_iterate = (B, n_kv)
         centroids = torch.zeros(B, n_kv, n_clusters, d_head, device=device)
         cluster_assignments = torch.zeros(B, n_kv, L, dtype=torch.long, device=device)
 
-    device = activation.device
-
-    data_cpu = activation.cpu().numpy()
-
-    # Initialize outputs
-    # Perform kmeans for each sample
-    for i in range(B):
-        kmeans = KMeans(
+    for idx in np.ndindex(*dims_to_iterate):
+        data_2d = data_cpu[idx]  # This will automatically get the correct slice
+        kmeans_model = KMeans(
             n_clusters=n_clusters, max_iter=max_iters, tol=tolerance, random_state=seed
         )
-        cluster_assignments[i] = torch.from_numpy(kmeans.fit_predict(data_cpu[i])).to(
-            device
-        )
-        centroids[i] = torch.from_numpy(kmeans.cluster_centers_).to(device)
+        cluster_assignments[idx] = torch.from_numpy(
+            kmeans_model.fit_predict(data_2d)
+        ).to(device)
+        centroids[idx] = torch.from_numpy(kmeans_model.cluster_centers_).to(device)
 
     return centroids, cluster_assignments
 
@@ -123,10 +128,11 @@ def cluster_qk(att_wei, k, q):
             centroids,
             "B n_kv n_q_per_kv Qlen d_head, B n_kv n_q_per_kv n_clusters d_head -> B n_kv n_q_per_kv Qlen n_clusters",
         )
+        # B n_kv Klen d_head
         cluster_alignment = einsum(
             k,
             centroids,
-            "B n_kv Klen d_head, B n_kv n_clusters d_head -> B n_kv Klen n_clusters",
+            "B n_kv Klen d_head, B n_kv n_q_per_kv n_clusters d_head -> B n_kv n_q_per_kv Klen n_clusters",
         )
     elif clustering_with == "independent_q_k":
         q_centroids, q_cluster_assignments = kmeans(q, "q_proj", n_clusters=n_clusters)
@@ -146,6 +152,10 @@ def cluster_qk(att_wei, k, q):
         raise ValueError(f"Invalid clustering_with: {clustering_with}")
 
     return cluster_alignment, cluster_assignments
+
+
+# %%
+cluster_qk(att_wei, k, q)
 
 
 # %%
@@ -216,3 +226,5 @@ def calculate_cluster_alignment(cluster_alignment, cluster_assignments, att_wei)
     print(f"  Average Prob across all queries: {total_probs.mean().item():.3f}")
     print(f"  Min Prob across all queries: {total_probs.min().item():.3f}")
     print(f"  Max Prob across all queries: {total_probs.max().item():.3f}")
+
+# %%
