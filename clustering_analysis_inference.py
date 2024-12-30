@@ -19,7 +19,7 @@ model = LlamaForCausalLM.from_pretrained(model_type.value)
 config = model.config
 # %%
 n_clusters = 50
-clustering_with = "q"  # ["q", "independent_q_k", "avg_wei_k"]
+clustering_with = "k"  # ["k", "independent_q_k", "avg_wei_k"]
 layer_idx = 15
 # %%
 n_kv_heads = model.config.num_key_value_heads
@@ -121,18 +121,13 @@ def cluster_qk(att_wei, k, q):
             centroids,
             "B n_kv n_q_per_kv Qlen d_head, B n_kv n_q_per_kv n_clusters d_head -> B n_kv n_q_per_kv Qlen n_clusters",
         )
-    elif clustering_with == "q":
-        centroids, cluster_assignments = kmeans(q, "q_proj", n_clusters=n_clusters)
-        q_cluster_alignment = einsum(
+        # B, n_kv, n_q_per_kv, n_clusters, d_head
+    elif clustering_with == "k":
+        centroids, cluster_assignments = kmeans(k, "k_proj", n_clusters=n_clusters)
+        cluster_alignment = einsum(
             q,
             centroids,
-            "B n_kv n_q_per_kv Qlen d_head, B n_kv n_q_per_kv n_clusters d_head -> B n_kv n_q_per_kv Qlen n_clusters",
-        )
-        # B n_kv Klen d_head
-        cluster_alignment = einsum(
-            k,
-            centroids,
-            "B n_kv Klen d_head, B n_kv n_q_per_kv n_clusters d_head -> B n_kv n_q_per_kv Klen n_clusters",
+            "B n_kv n_q_per_kv Qlen d_head, B n_kv n_clusters d_head -> B n_kv n_q_per_kv Qlen n_clusters",
         )
     elif clustering_with == "independent_q_k":
         q_centroids, q_cluster_assignments = kmeans(q, "q_proj", n_clusters=n_clusters)
@@ -155,7 +150,18 @@ def cluster_qk(att_wei, k, q):
 
 
 # %%
-cluster_qk(att_wei, k, q)
+cluster_alignment, cluster_assignments = cluster_qk(att_wei, k, q)
+
+
+# TODO: for k and avg_wei_k:
+# for each query, find the top X k-clusters the align most with it
+#   for that query, calculate the probability given those keys from each cluster
+# do this also with the top X avg_wei_k-clusters
+
+# TODO: for independent_q_k,
+# for each q-cluster find the top X k-clusters that aligns most with it
+#   grab the selection of queries from the q-cluster
+#   for each of the top X k-clusters, calculate the probability given those keys from each cluster
 
 
 # %%
@@ -226,5 +232,6 @@ def calculate_cluster_alignment(cluster_alignment, cluster_assignments, att_wei)
     print(f"  Average Prob across all queries: {total_probs.mean().item():.3f}")
     print(f"  Min Prob across all queries: {total_probs.min().item():.3f}")
     print(f"  Max Prob across all queries: {total_probs.max().item():.3f}")
+
 
 # %%
