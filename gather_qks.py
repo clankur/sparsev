@@ -153,10 +153,11 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 # Save each type of projection for each layer
 for proj_type, layers in model.attention_intermediates.items():
+    if proj_type == "logits":
+        continue
     for layer_idx, tensors in enumerate(layers):
         # Stack all tensors for this layer and projection type
-        if proj_type == "logits":
-            tensors = [t[..., -1:] for t in tensors]
+
         layer_tensors = torch.stack(tensors)
 
         # Create filename
