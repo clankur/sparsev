@@ -336,6 +336,7 @@ class LlamaAttention(nn.Module):
         self.rotary_emb = LlamaRotaryEmbedding(config=self.config)
         self.roped_q_proj = Identity()
         self.roped_k_proj = Identity()
+        self.att_wei = Identity()
 
     def forward(
         self,
@@ -376,19 +377,22 @@ class LlamaAttention(nn.Module):
             query_states, key_states, cos, sin
         )
         query_states = self.roped_q_proj(query_states)
+        key_states = self.roped_k_proj(key_states)
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
-        key_states = self.roped_k_proj(key_states)
 
+        # print(f"Before: {key_states.shape=}")
         key_states = repeat_kv(key_states, self.num_key_value_groups)
+        # print(f"After: {key_states.shape=}")
         value_states = repeat_kv(value_states, self.num_key_value_groups)
         attn_weights = torch.matmul(
             query_states, key_states.transpose(2, 3)
         ) / math.sqrt(self.head_dim)
+        attn_weights = self.att_wei(attn_weights)
 
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
@@ -492,13 +496,13 @@ class LlamaFlashAttention2(LlamaAttention):
         )
 
         query_states = self.roped_q_proj(query_states)
+        key_states = self.roped_k_proj(key_states)
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
-        key_states = self.roped_k_proj(key_states)
         # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
         # to be able to avoid many of these transpose/reshape/view.
         query_states = query_states.transpose(1, 2)
@@ -620,13 +624,14 @@ class LlamaSdpaAttention(LlamaAttention):
             query_states, key_states, cos, sin
         )
         query_states = self.roped_q_proj(query_states)
+        key_states = self.roped_k_proj(key_states)
+
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
-        key_states = self.roped_k_proj(key_states)
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
