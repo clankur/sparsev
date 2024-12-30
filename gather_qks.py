@@ -34,9 +34,9 @@ from modeling_llama import LlamaForCausalLM
 # %%
 model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
-seq_len = 2048
+seq_len = 1024
 batch_size = 4
-n_samples = 100
+n_samples = 25
 # %%
 model_name = model_type.value
 tokenizer = AutoTokenizer.from_pretrained(
@@ -44,15 +44,14 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
 # %%
-model = LlamaForCausalLM.from_pretrained(
-    model_name, output_attentions=True, return_dict_in_generate=True
-)
+model = LlamaForCausalLM.from_pretrained(model_name)
 model = model.to(device)
 config = model.config
 config
 
 
 # %%
+sample_idx = 0
 model.attention_intermediates = {}
 n_kv_heads = model.config.num_key_value_heads
 n_q_per_kv = model.config.num_attention_heads // model.config.num_key_value_heads
@@ -66,17 +65,21 @@ for name, module in model.named_modules():
 
 
 def attention_forward_hook(module, input, output):
+    global sample_idx
     full_name = module_to_name[module]
     parts = full_name.split(".")
     proj_type = parts[-1]  # e.g., 'q_proj'
     layer_num = parts[2]  # e.g., '0' from 'model.layers.0.self_attn.q_proj'
     if proj_type not in model.attention_intermediates:
         model.attention_intermediates[proj_type] = [
-            [] for _ in range((model.config.num_hidden_layers))
+            [[] for _ in range((model.config.num_hidden_layers))]
+            for _ in range(n_samples)
         ]
 
     if proj_type in saved_projs:
-        model.attention_intermediates[proj_type][int(layer_num)].append(output.cpu())
+        model.attention_intermediates[proj_type][sample_idx][int(layer_num)].append(
+            output.cpu()
+        )
     return output
 
 
@@ -89,30 +92,41 @@ sequence_ids = torch.stack(next(stream)).to(device)
 past_key_values = None
 
 model.eval()
-with torch.no_grad():
-    seq_index = 0
-    while seq_index < sequence_ids.size(1):
-        # Take the "next token" directly from sequence_ids
-        next_token_id = sequence_ids[:, seq_index : seq_index + 1]
+while sample_idx < n_samples:
+    with torch.no_grad():
+        seq_index = 0
+        while seq_index < sequence_ids.size(1):
+            # Take the "next token" directly from sequence_ids
+            next_token_id = sequence_ids[:, seq_index : seq_index + 1]
 
-        # If there's no past yet, feed the entire context. Otherwise, just feed the single next token.
-        input_ids = next_token_id
+            # If there's no past yet, feed the entire context. Otherwise, just feed the single next token.
+            input_ids = next_token_id
 
-        outputs = model(
-            input_ids=input_ids, past_key_values=past_key_values, use_cache=True
-        )
+            outputs = model(
+                input_ids=input_ids, past_key_values=past_key_values, use_cache=True
+            )
 
-        past_key_values = outputs.past_key_values
-        # Append next_token_id to generated_ids for final decoding
-        seq_index += 1
+            past_key_values = outputs.past_key_values
+            # Append next_token_id to generated_ids for final decoding
+            seq_index += 1
+    past_key_values = None
+    sample_idx += 1
+
 
 # %%
-for i in range(model.config.num_hidden_layers):
-    print(torch.stack(model.attention_intermediates["q_proj"][i]).shape)
+for proj_type, activation in model.attention_intermediates.items():
+    if proj_type == "logits":
+        continue
+    model.attention_intermediates[proj_type] = torch.stack(
+        [torch.stack([torch.stack(layer) for layer in sample]) for sample in activation]
+    )
+    print(proj_type, model.attention_intermediates[proj_type].shape)
+
 
 # %%
-q = model.attention_intermediates["roped_q_proj"][-1][-1]
-k = model.attention_intermediates["roped_k_proj"][-1]
+# get last sample, last layer keys calulate logits for last query of same sample, layer
+q = model.attention_intermediates["roped_q_proj"][-1][-1][-1]
+k = model.attention_intermediates["roped_k_proj"][-1][-1]
 q = rearrange(
     q,
     "B (n_kv n_q_per_kv) Qlen d_head -> B n_kv n_q_per_kv Qlen d_head",
@@ -138,15 +152,15 @@ logits = rearrange(
 )
 logits.shape
 # %%
-output_logits = model.attention_intermediates["logits"][-1][-1]
-output_logits.shape
-# %%
-assert logits.shape == output_logits.shape, f"{logits.shape=} != {output_logits.shape=}"
-# %%
-is_equal = torch.allclose(logits, output_logits, rtol=1e-5, atol=1e-5)
-max_diff = torch.max(torch.abs(logits - output_logits))
-print(f"Attention weights equal: {is_equal}")
-print(f"Maximum difference: {max_diff:.2e}")
+if "logits" in model.attention_intermediates:
+    output_logits = model.attention_intermediates["logits"][-1][-1][-1]
+    assert (
+        logits.shape == output_logits.shape
+    ), f"{logits.shape=} != {output_logits.shape=}"
+    is_equal = torch.allclose(logits, output_logits, rtol=1e-5, atol=1e-5)
+    max_diff = torch.max(torch.abs(logits - output_logits))
+    print(f"Attention weights equal: {is_equal}")
+    print(f"Maximum difference: {max_diff:.2e}")
 
 # %%
 output_dir = Path("/mnt/HDD/datsets/attention_intermediates")
