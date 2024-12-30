@@ -7,6 +7,7 @@ import functools
 from torch.utils.data import DataLoader
 import numpy as np
 from einops import rearrange, einops
+from pathlib import Path
 
 
 class DatasetTypes(Enum):
@@ -156,3 +157,54 @@ def ensure_figs_folder():
 
     if not os.path.exists("figs"):
         os.makedirs("figs")
+
+
+def load_attention_intermediates(base_dir="/mnt/HDD/datsets/attention_intermediates"):
+    base_dir = Path(base_dir)
+    attention_intermediates = {}
+
+    # Get all .pt files
+    files = list(base_dir.glob("*.pt"))
+
+    # Extract unique projection types from filenames
+    proj_types = set(f.stem.split("_", 2)[2] for f in files)
+    n_layers = len(list(base_dir.glob(f"layer_*_{next(iter(proj_types))}.pt")))
+
+    # Initialize the dictionary structure
+    for proj_type in proj_types:
+        attention_intermediates[proj_type] = [None] * n_layers
+
+    # Load each file
+    for file in files:
+        # Parse filename to get layer and projection type
+        layer_str, proj_type = file.stem.split("_", 2)[1:]
+        layer_idx = int(layer_str)
+
+        # Load tensor
+        tensor = torch.load(file)
+        attention_intermediates[proj_type][layer_idx] = tensor
+
+    return attention_intermediates
+
+
+def load_layer_projection(
+    layer_idx: int, proj_type: str, base_dir="/mnt/HDD/datsets/attention_intermediates"
+):
+    """
+    Load a specific layer's projection tensor.
+
+    Args:
+        layer_idx (int): Index of the layer to load
+        proj_type (str): Type of projection ('q_proj', 'k_proj', 'v_proj', 'roped_q_proj', 'roped_k_proj', 'att_wei')
+        base_dir (str): Base directory containing the saved tensors
+
+    Returns:
+        torch.Tensor: The loaded tensor
+    """
+    base_dir = Path(base_dir)
+    file_path = base_dir / f"layer_{layer_idx}_{proj_type}.pt"
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"No saved tensor found at {file_path}")
+
+    return torch.load(file_path)

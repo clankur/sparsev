@@ -34,16 +34,15 @@ from modeling_llama import LlamaForCausalLM
 # %%
 model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
-initial_seq_len = 256
-max_seq_len = 1024
-batch_size = 4
+seq_len = 1024
+batch_size = 8
 
 # %%
 model_name = model_type.value
 tokenizer = AutoTokenizer.from_pretrained(
     model_name,
 )
-stream = get_dataset(dataset_type, tokenizer, initial_seq_len, batch_size)
+stream = get_dataset(dataset_type, tokenizer, seq_len, batch_size)
 # %%
 model = LlamaForCausalLM.from_pretrained(
     model_name, output_attentions=True, return_dict_in_generate=True
@@ -144,3 +143,26 @@ print(f"Attention weights equal: {is_equal}")
 print(f"Maximum difference: {max_diff:.2e}")
 
 # %%
+output_dir = Path("/mnt/HDD/datsets/attention_intermediates")
+# Remove directory if it exists and recreate it
+if output_dir.exists():
+    import shutil
+
+    shutil.rmtree(output_dir)
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# Save each type of projection for each layer
+for proj_type, layers in model.attention_intermediates.items():
+    for layer_idx, tensors in enumerate(layers):
+        # Stack all tensors for this layer and projection type
+        if proj_type == "att_wei":
+            tensors = [t[..., -1:] for t in tensors]
+        layer_tensors = torch.stack(tensors)
+
+        # Create filename
+        filename = output_dir / f"layer_{layer_idx}_{proj_type}.pt"
+
+        # Save tensor
+        torch.save(layer_tensors, filename)
+
+print(f"Saved attention intermediates to {output_dir}")
