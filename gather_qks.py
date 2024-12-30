@@ -36,7 +36,7 @@ model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
 seq_len = 2048
 batch_size = 4
-
+n_samples = 100
 # %%
 model_name = model_type.value
 tokenizer = AutoTokenizer.from_pretrained(
@@ -111,15 +111,21 @@ for i in range(model.config.num_hidden_layers):
     print(torch.stack(model.attention_intermediates["q_proj"][i]).shape)
 
 # %%
-
 q = model.attention_intermediates["roped_q_proj"][-1][-1]
-k = model.attention_intermediates["roped_k_proj"][-1][-1]
+k = model.attention_intermediates["roped_k_proj"][-1]
 q = rearrange(
     q,
     "B (n_kv n_q_per_kv) Qlen d_head -> B n_kv n_q_per_kv Qlen d_head",
     n_kv=n_kv_heads,
     n_q_per_kv=n_q_per_kv,
 )
+k = rearrange(
+    k,
+    "seq_len B n_kv Klen d_head -> B n_kv (seq_len Klen) d_head",
+    n_kv=n_kv_heads,
+    d_head=d_head,
+)
+
 print(f"{q.shape=}", f"{k.shape=}")
 logits = einsum(
     q,
@@ -132,7 +138,7 @@ logits = rearrange(
 )
 logits.shape
 # %%
-output_logits = model.attention_intermediates["logits"][-1][-1][..., -1:]
+output_logits = model.attention_intermediates["logits"][-1][-1]
 output_logits.shape
 # %%
 assert logits.shape == output_logits.shape, f"{logits.shape=} != {output_logits.shape=}"
