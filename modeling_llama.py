@@ -336,7 +336,7 @@ class LlamaAttention(nn.Module):
         self.rotary_emb = LlamaRotaryEmbedding(config=self.config)
         self.roped_q_proj = Identity()
         self.roped_k_proj = Identity()
-        self.att_wei = Identity()
+        self.logits = Identity()
 
     def forward(
         self,
@@ -392,7 +392,7 @@ class LlamaAttention(nn.Module):
         attn_weights = torch.matmul(
             query_states, key_states.transpose(2, 3)
         ) / math.sqrt(self.head_dim)
-        attn_weights = self.att_wei(attn_weights)
+        attn_weights = self.logits(attn_weights)
 
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]

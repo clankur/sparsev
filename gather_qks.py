@@ -34,8 +34,8 @@ from modeling_llama import LlamaForCausalLM
 # %%
 model_type = ModelTypes.LLAMA
 dataset_type = DatasetTypes.CODE
-seq_len = 1024
-batch_size = 8
+seq_len = 2048
+batch_size = 4
 
 # %%
 model_name = model_type.value
@@ -58,7 +58,7 @@ n_kv_heads = model.config.num_key_value_heads
 n_q_per_kv = model.config.num_attention_heads // model.config.num_key_value_heads
 d_head = model.config.head_dim
 
-saved_projs = ["q_proj", "k_proj", "v_proj", "roped_q_proj", "roped_k_proj", "att_wei"]
+saved_projs = ["q_proj", "k_proj", "v_proj", "roped_q_proj", "roped_k_proj", "logits"]
 module_to_name = {}
 for name, module in model.named_modules():
     if any(proj in name.lower() for proj in saved_projs):
@@ -132,7 +132,7 @@ logits = rearrange(
 )
 logits.shape
 # %%
-output_logits = model.attention_intermediates["att_wei"][-1][-1][..., -1:]
+output_logits = model.attention_intermediates["logits"][-1][-1][..., -1:]
 output_logits.shape
 # %%
 assert logits.shape == output_logits.shape, f"{logits.shape=} != {output_logits.shape=}"
@@ -155,7 +155,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 for proj_type, layers in model.attention_intermediates.items():
     for layer_idx, tensors in enumerate(layers):
         # Stack all tensors for this layer and projection type
-        if proj_type == "att_wei":
+        if proj_type == "logits":
             tensors = [t[..., -1:] for t in tensors]
         layer_tensors = torch.stack(tensors)
 
@@ -166,3 +166,5 @@ for proj_type, layers in model.attention_intermediates.items():
         torch.save(layer_tensors, filename)
 
 print(f"Saved attention intermediates to {output_dir}")
+
+# %%
