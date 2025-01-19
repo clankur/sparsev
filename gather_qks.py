@@ -88,11 +88,11 @@ for name, module in model.named_modules():
         module.register_forward_hook(attention_forward_hook)
 
 # %%
-sequence_ids = torch.stack(next(stream)).to(device)
-past_key_values = None
 
 model.eval()
 while sample_idx < n_samples:
+    past_key_values = None
+    sequence_ids = torch.stack(next(stream)).to(device)
     with torch.no_grad():
         seq_index = 0
         while seq_index < sequence_ids.size(1):
@@ -109,7 +109,6 @@ while sample_idx < n_samples:
             past_key_values = outputs.past_key_values
             # Append next_token_id to generated_ids for final decoding
             seq_index += 1
-    past_key_values = None
     sample_idx += 1
 
 

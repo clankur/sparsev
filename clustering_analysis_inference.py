@@ -161,7 +161,7 @@ cluster_alignment, cluster_assignments = cluster_qk(att_wei, k, q)
 # TODO: for independent_q_k,
 # for each q-cluster find the top X k-clusters that aligns most with it
 #   grab the selection of queries from the q-cluster
-#   for each of the top X k-clusters, calculate the probability given those keys from each cluster
+#   for each of the top X k-clusters, calculate the probability given those keys from each cluster for each of the queries in the q-cluster
 
 
 # %%
