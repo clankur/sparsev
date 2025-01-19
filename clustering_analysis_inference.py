@@ -19,7 +19,7 @@ model = LlamaForCausalLM.from_pretrained(model_type.value)
 config = model.config
 # %%
 n_clusters = 50
-clustering_with = "k"  # ["k", "independent_q_k", "avg_wei_k"]
+clustering_with = "k"  #  OPTIONS = ["k", "independent_q_k", "avg_wei_k"]
 layer_idx = 15
 # %%
 n_kv_heads = model.config.num_key_value_heads
